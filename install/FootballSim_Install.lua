@@ -530,14 +530,13 @@ local keeperDiveRef = nil
 
 local READY_POSE = KeeperAnim.new({ dz = 0, height = 0.5 }):sample(0.15).pose
 
--- Kaleci pozu: dalış hedefi değiştiğinde yeni animasyon başlar
+-- Kaleci pozu: yeni dalış hedefi geldiğinde animasyon başlar; süresi bittiğinde READY_POSE'a döner.
 local function keeperPose(dt)
 	if not ANIM.keeperPoseEnabled then
 		return nil
 	end
 	local target = keeper.diveTarget
-	if target and target ~= keeperDiveRef then
-		keeperDiveRef = target
+	if target and (not keeperAnim or keeperAnimT >= keeperAnim:duration()) then
 		keeperAnim = KeeperAnim.new({
 			dz = target.dz,
 			height = target.height,
@@ -551,7 +550,6 @@ local function keeperPose(dt)
 			return keeperAnim:sample(keeperAnimT).pose
 		end
 		keeperAnim = nil
-		keeperDiveRef = keeper.diveTarget
 	end
 	return READY_POSE
 end
@@ -3400,7 +3398,7 @@ function BallControl:update(ball, player, now)
 		     => v_top = v_oyuncu + 0.5*a*t
 		     Bu yüzden iyi bir top sürücü neredeyse hiç hız kaybetmez; top ayağından
 		     kaçmaz. Sprint cezası bu hedefi büyütür (aşırı vurulan dokunuş). ]]
-		local dir = Vec3.unit(Vec3.add(Vec3.scale(facingDir, 1.0), Vec3.scale(flatDir, 0.35)))
+		local dir = Vec3.unit(Vec3.add(Vec3.scale(facingDir, 0.80), Vec3.scale(flatDir, 0.20)))
 		local a = self.cfg.BALL.rollResistance * self.cfg.GRAVITY
 		local baseSpeed = playerSpeed + 0.5 * a * BC.touchInterval
 		local targetSpeed = (baseSpeed + BC.touchForward) * controlFactor
@@ -3555,7 +3553,7 @@ function Keeper:step(ball, dt)
 	local targetZ = 0
 	local wantDive = false
 
-	if towardGoal and distanceToLine > 0 and distanceToLine < 18 then
+	if towardGoal and distanceToLine > 0 and distanceToLine < P.halfLength then
 		self.reactionTimer = self.reactionTimer + dt
 		if self.reactionTimer >= K.reactionTime then
 			local arrival = self:predictArrival(ball, 2.5)

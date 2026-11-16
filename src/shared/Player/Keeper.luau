@@ -92,7 +92,7 @@ function Keeper:step(ball, dt)
 	local targetZ = 0
 	local wantDive = false
 
-	if towardGoal and distanceToLine > 0 and distanceToLine < 18 then
+	if towardGoal and distanceToLine > 0 and distanceToLine < P.halfLength then
 		self.reactionTimer = self.reactionTimer + dt
 		if self.reactionTimer >= K.reactionTime then
 			local arrival = self:predictArrival(ball, 2.5)
