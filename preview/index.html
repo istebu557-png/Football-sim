@@ -156,7 +156,8 @@
   }
 
   function colorFor(id) {
-    return id === "falso" ? "#8b7bff" : id === "asirtma" ? "#ffb454" : id === "sekme" ? "#45a3ff" : "#3ddc84";
+    return id === "falso" ? "#8b7bff" : id === "asirtma" ? "#ffb454"
+      : id === "sekme" ? "#45a3ff" : id === "direk" ? "#ff6b6b" : "#3ddc84";
   }
 
   // ---------- Saha (üstten görünüm) ----------
@@ -407,6 +408,7 @@
       { k: "Yanal sapma", v: Math.abs(shot.curve).toFixed(2), u: "m", wide: false },
       { k: "Süre", v: shot.time.toFixed(2), u: "s", wide: false },
       { k: "Zemin teması", v: String(shot.bounces), u: "kez", wide: false },
+      { k: "Direk çarpması", v: String(shot.postHits || 0), u: "kez", wide: false },
       {
         k: "Sonuç",
         v: shot.goal ? "GOL" : (shot.type === "drop" ? "sekme testi" : "dışarı"),

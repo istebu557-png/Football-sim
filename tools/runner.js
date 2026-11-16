@@ -12,6 +12,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const installerLib = require("./installer_lib");
 
 const ROOT = path.resolve(__dirname, "..");
 const SRC = path.join(ROOT, "src");
@@ -51,6 +52,17 @@ function luaString(s) {
 }
 
 const files = walk(SRC).sort();
+
+// Tek kurulum dosyası kaynaklarla senkron mu?
+const freshInstaller = installerLib.generateInstaller().text;
+const onDiskInstaller = installerLib.readInstaller();
+let installerError = null;
+if (onDiskInstaller === null) {
+  installerError = "install/FootballSim_Install.lua yok. Çalıştır: npm run install:build";
+} else if (onDiskInstaller !== freshInstaller) {
+  installerError = "install/FootballSim_Install.lua kaynaklarla senkron değil. Çalıştır: npm run install:build";
+}
+
 const parts = [];
 parts.push("-- OTOMATIK URETILDI: tools/runner.js");
 parts.push("local SOURCES = {");
@@ -60,6 +72,12 @@ for (const file of files) {
 }
 parts.push("};");
 parts.push(fs.readFileSync(path.join(ROOT, "tools", "shim.luau"), "utf8"));
+parts.push("local INSTALLER_SRC = " + luaString(freshInstaller));
+parts.push(
+  "local RobloxMock = (function()\n" +
+    fs.readFileSync(path.join(ROOT, "tools", "roblox_mock.luau"), "utf8") +
+    "\nend)()"
+);
 
 const traceMode = process.argv.includes("--trace");
 const entry = traceMode ? "trace.luau" : "spec.luau";
@@ -106,4 +124,9 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 
 const failed = result.status !== 0 || /\n\s*\[FAIL\]/.test(result.stdout || "");
-process.exit(failed ? 1 : 0);
+
+if (installerError) {
+  console.error("\n[KURULUM DOSYASI] " + installerError);
+}
+
+process.exit(failed || installerError ? 1 : 0);

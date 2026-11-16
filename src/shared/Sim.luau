@@ -18,6 +18,7 @@ local Vec3 = require(script.Parent.Core.Vec3)
 local Rng = require(script.Parent.Core.Rng)
 local Ball = require(script.Parent.Physics.Ball)
 local Pitch = require(script.Parent.Physics.Pitch)
+local Colliders = require(script.Parent.Physics.Colliders)
 
 local Sim = {}
 Sim.__index = Sim
@@ -29,6 +30,7 @@ function Sim.new(opts)
 		cfg = cfg,
 		rng = Rng.new(opts.seed or 1),
 		ball = Ball.new(cfg, Vec3.new(0, cfg.BALL.radius, 0)),
+		obstacles = Pitch.buildObstacles(cfg),
 		ticks = 0, -- islenen sabit adim sayisi (metot adiyla cakismasin)
 		time = 0,
 		accumulator = 0,
@@ -45,10 +47,15 @@ function Sim:tick()
 
 	self.ball:step(dt)
 
+	-- Direk / üst direk çarpışması (kale tespitinden ÖNCE: direğe çarpan top gol değil)
+	Colliders.resolve(self.ball, self.obstacles, prev)
+
 	-- Kale tespiti (top bu adımda kale çizgisini geçtiyse)
 	local side = Pitch.goalCrossed(prev, self.ball.pos, self.cfg.BALL.radius)
 	if side then
 		self.lastGoal = { side = side, tick = self.ticks + 1, pos = self.ball.pos }
+		-- Ağ topu tutar: kale çizgisini geçen top durur (Adım 5'te santra gelecek)
+		self.ball.vel = Vec3.new(0, 0, -self.ball.vel.z * 0.1)
 	end
 
 	self.ticks = self.ticks + 1

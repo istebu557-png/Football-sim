@@ -62,7 +62,36 @@ local function loadModule(path)
 	return result
 end
 
+-- Sahte Roblox ortamındaki ModuleScript'leri yükleme (inst.Source -> chunk)
+local function loadRobloxModule(instance)
+	local id = "__roblox/" .. tostring(rawget(instance, "__path"))
+	local cached = loaded[id]
+	if cached ~= nil then
+		return cached
+	end
+	local src = rawget(instance, "__props") and rawget(instance, "__props").Source or nil
+	if not src or src == "" then
+		error("ModuleScript kaynagi bos: " .. tostring(instance.Name), 2)
+	end
+	local chunk, err = load(src, "@" .. id)
+	if not chunk then
+		error(tostring(instance.Name) .. " sozdizimi hatali: " .. tostring(err), 0)
+	end
+	local prev = _G.script
+	_G.script = instance
+	local ok, result = pcall(chunk)
+	_G.script = prev
+	if not ok then
+		error(tostring(instance.Name) .. " yuklenemedi: " .. tostring(result), 0)
+	end
+	loaded[id] = result
+	return result
+end
+
 _G.require = function(target)
+	if type(target) == "table" and rawget(target, "__robloxInstance") then
+		return loadRobloxModule(target)
+	end
 	if type(target) == "table" and rawget(target, "__path") then
 		return loadModule(rawget(target, "__path"))
 	end

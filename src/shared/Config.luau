@@ -56,6 +56,10 @@ Config.BALL = {
 
 	-- Sekme sonrası spinin dikey zıplamaya etkisi (backspin topu alçak tutar).
 	spinBounceCoupling = 0.06,
+
+	-- Direk/üst direk çarpışması (metal, çimden daha canlı sekmez)
+	postRestitution = 0.62,
+	postFriction = 0.35,
 }
 
 Config.PITCH = {
@@ -73,6 +77,10 @@ Config.PITCH = {
 	penaltySpot = 11,
 	centerCircleRadius = 9.15,
 	cornerArcRadius = 1,
+
+	-- Direkler: top bunlara çarpıp döner (Colliders modülü)
+	postRadius = 0.06, -- 12 cm direk
+	crossbarRadius = 0.06,
 }
 
 Config.PLAYER = {

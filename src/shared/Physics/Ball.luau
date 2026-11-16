@@ -85,6 +85,7 @@ function Ball.new(cfg, position)
 		spin = Vec3.new(0, 0, 0),
 		mode = "ground", -- "air" | "ground"
 		contacts = 0, -- toplam zemin teması sayısı (telemetri/test)
+		postHits = 0, -- direk/üst direk çarpışması sayısı (telemetri/test)
 	}, Ball)
 	-- Havada başlıyorsa modu düzelt
 	if pos.y > r + 1e-6 then
@@ -310,6 +311,7 @@ function Ball:clone()
 	copy.spin = Vec3.new(self.spin.x, self.spin.y, self.spin.z)
 	copy.mode = self.mode
 	copy.contacts = self.contacts
+	copy.postHits = self.postHits
 	return copy
 end
 

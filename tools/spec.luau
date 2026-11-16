@@ -101,6 +101,18 @@ test("tum Luau dosyalari gecerli sozdizimine sahip", function()
 	check(#bad == 0, "sozdizimi hatasi:\n  " .. table.concat(bad, "\n  "))
 end)
 
+test("tek kurulum dosyasi gecerli Lua ve tum modulleri iceriyor", function()
+	local chunk, err = load(INSTALLER_SRC, "@FootballSim_Install")
+	check(chunk ~= nil, "kurulum dosyasi sozdizimi hatali: " .. tostring(err))
+	local missing = {}
+	for path in pairs(SOURCES) do
+		if not INSTALLER_SRC:find(path, 1, true) then
+			missing[#missing + 1] = path
+		end
+	end
+	check(#missing == 0, "kurulumda eksik modul: " .. table.concat(missing, ", "))
+end)
+
 print("\n== 1. Vektor matematigi ==")
 
 test("3-4-5 ucgeni: |(3,4,0)| = 5", function()
@@ -390,6 +402,48 @@ test("penalti simulasyonu gol olarak kaydedilir", function()
 	between(sim.lastGoal.tick, 100, 160, "gol tick'i (0.42-0.67 s)")
 end)
 
+print("\n== 5b. Direk ve ust direk carpismasi ==")
+
+test("direge carpan sut gol sayilmaz, geri doner", function()
+	local sim = Sim.new({ seed = 1 })
+	local r = Config.BALL.radius
+	sim.ball:setState(Vec3.new(49.5, r, 3.66), Vec3.new(22, 0, 0), Vec3.new(0, 0, 0))
+	sim:advance(1.5)
+	check(sim.lastGoal == nil, "direge carpan top gol sayildi")
+	check(sim.ball.postHits >= 1, "carpisma algilanmadi")
+	check(sim.ball.pos.x < 52.5, "top diregin icinden gecti: x=" .. tostring(sim.ball.pos.x))
+end)
+
+test("ust direge carpan top gol olmaz", function()
+	local sim = Sim.new({ seed = 1 })
+	local r = Config.BALL.radius
+	local P = Config.PITCH
+	sim.ball:setState(Vec3.new(51.0, P.goalHeight, 0), Vec3.new(20, 0, 0), Vec3.new(0, 0, 0))
+	sim:advance(1)
+	check(sim.lastGoal == nil, "ust direge carpan top gol sayildi")
+	check(sim.ball.postHits >= 1, "ust direk carpismasi algilanmadi")
+end)
+
+test("kale ortasina giden sut gol olur (direk karismaz)", function()
+	local sim = Sim.new({ seed = 1 })
+	sim.ball:setState(Vec3.new(41.5, Config.BALL.radius, 0), Vec3.new(22, 3.2, 0), Vec3.new(0, 0, 0))
+	sim:advance(1.2)
+	check(sim.lastGoal ~= nil and sim.lastGoal.side == "home", "gol tespit edilemedi")
+	check(sim.ball.postHits == 0, "gereksiz direk carpismasi: " .. tostring(sim.ball.postHits))
+end)
+
+test("carpismadan sonra top direge gomulmez", function()
+	local sim = Sim.new({ seed = 1 })
+	local r = Config.BALL.radius
+	sim.ball:setState(Vec3.new(49.0, 1.0, 3.66), Vec3.new(18, 0, 0), Vec3.new(0, 0, 0))
+	sim:advance(0.6)
+	local P = Config.PITCH
+	local dx = sim.ball.pos.x - P.halfLength
+	local dz = sim.ball.pos.z - P.goalHalfWidth
+	local dist = math.sqrt(dx * dx + dz * dz)
+	check(dist >= r + P.postRadius - 1e-3, "top diregin icine girdi, mesafe=" .. tostring(dist))
+end)
+
 print("\n== 6. Determinizm ve sabit adim ==")
 
 test("ayni tohum + ayni girdi = bit-bit ayni sonuc", function()
@@ -528,6 +582,115 @@ test("timeToReach tahmini gercekle uyumlu (%20 tolerans)", function()
 		t = t + Config.FIXED_DT
 	end
 	near(t, predicted, predicted * 0.2, "tahmin vs gercek")
+end)
+
+print("\n== 8. Tek kurulum dosyasi (sahte Roblox ortaminda) ==")
+
+local installMock = nil
+
+test("kurulum dosyasi hatasiz calisiyor", function()
+	installMock = RobloxMock.install()
+
+	local captured = {}
+	local realPrint = print
+	print = function(...)
+		local parts = {}
+		for i = 1, select("#", ...) do
+			parts[i] = tostring(select(i, ...))
+		end
+		captured[#captured + 1] = table.concat(parts, " ")
+	end
+
+	local ok, err = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+
+	print = realPrint
+	check(ok, "kurulum hata verdi: " .. tostring(err))
+	check(#captured > 0, "kurulum rapor uretmedi")
+	check(table.concat(captured, "\n"):find("FootballSim kurulumu", 1, true) ~= nil, "rapor basligi yok")
+end)
+
+test("script agaci dogru kuruldu (shared / server / client)", function()
+	check(installMock ~= nil, "kurulum calismadi")
+	local rs = installMock.replicatedStorage
+	local shared = rs:FindFirstChild("Shared")
+	check(shared ~= nil, "ReplicatedStorage.Shared yok")
+
+	local config = shared:FindFirstChild("Config")
+	check(config ~= nil and config.ClassName == "ModuleScript", "Config ModuleScript degil")
+	check(config.Source ~= "", "Config kaynagi bos")
+
+	local core = shared:FindFirstChild("Core")
+	check(core ~= nil and core:FindFirstChild("Vec3") ~= nil, "Core.Vec3 yok")
+	local physics = shared:FindFirstChild("Physics")
+	check(physics ~= nil and physics:FindFirstChild("Ball") ~= nil, "Physics.Ball yok")
+	local world = shared:FindFirstChild("World")
+	check(world ~= nil and world:FindFirstChild("SceneBuilder") ~= nil, "World.SceneBuilder yok")
+
+	local server = installMock.serverScriptService:FindFirstChild("Server")
+	check(server ~= nil and server:FindFirstChild("SimLoop") ~= nil, "Sunucu SimLoop yok")
+	check(server:FindFirstChild("SimLoop").ClassName == "Script", "SimLoop Script degil")
+
+	local client = installMock.starterPlayerScripts:FindFirstChild("Client")
+	check(client ~= nil and client:FindFirstChild("BallView") ~= nil, "Istemci BallView yok")
+	check(client:FindFirstChild("BallView").ClassName == "LocalScript", "BallView LocalScript degil")
+end)
+
+test("sahne kuruldu: cim, cizgiler, iki kale, direkler, ag, top", function()
+	local ws = installMock.workspace
+	local pitch = ws:FindFirstChild("FootballPitch")
+	check(pitch ~= nil, "FootballPitch klasoru yok")
+	check(pitch:FindFirstChild("Surface") ~= nil, "cim yok")
+
+	local lines = pitch:FindFirstChild("Lines")
+	check(lines ~= nil, "cizgiler yok")
+	local lineCount = #lines:GetChildren()
+	check(lineCount > 20, "cizgi sayisi cok az: " .. tostring(lineCount))
+
+	local goals = pitch:FindFirstChild("Goals")
+	check(goals ~= nil and #goals:GetChildren() == 2, "iki kale beklenirdi")
+
+	for _, goalName in ipairs({ "GoalEast", "GoalWest" }) do
+		local goal = goals:FindFirstChild(goalName)
+		check(goal ~= nil, goalName .. " yok")
+		local posts = 0
+		for _, child in ipairs(goal:GetChildren()) do
+			if child.Name == "Post" then
+				posts = posts + 1
+			end
+		end
+		check(posts == 2, goalName .. ": iki direk beklenirdi, gelen " .. tostring(posts))
+		check(goal:FindFirstChild("Crossbar") ~= nil, goalName .. ": ust direk yok")
+		check(goal:FindFirstChild("NetBack") ~= nil, goalName .. ": ag yok")
+	end
+
+	local ball = ws:FindFirstChild("MatchBall")
+	check(ball ~= nil, "top yok")
+	check(ball.Shape == "PartType.Ball", "top sekli yanlis: " .. tostring(ball.Shape))
+end)
+
+test("kurulum tekrar calistirilinca cogaltmiyor (idempotent)", function()
+	local ws = installMock.workspace
+	local pitch = ws:FindFirstChild("FootballPitch")
+	local goals = pitch:FindFirstChild("Goals")
+	local before = #goals:GetChildren()
+	local lineCountBefore = #pitch:FindFirstChild("Lines"):GetChildren()
+
+	local realPrint = print
+	print = function() end
+	local ok = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+	print = realPrint
+	check(ok, "ikinci kurulum hata verdi")
+
+	local pitchAfter = ws:FindFirstChild("FootballPitch")
+	check(#pitchAfter:GetChildren() > 0, "sahne silindi")
+	check(#pitchAfter:FindFirstChild("Goals"):GetChildren() == before, "kale klasorleri cogaldi")
+	check(#pitchAfter:FindFirstChild("Lines"):GetChildren() == lineCountBefore, "cizgiler cogaldi")
 end)
 
 print("")

@@ -78,6 +78,36 @@ function Pitch.classifyOutOfPlay(pos, radius)
 	return nil
 end
 
+--[[ Direk ve üst direk geometrisi: Colliders modülünün kullandığı kapsüller.
+	Kale çizgisi x = ±52.5; direkler tam çizgi üzerinde, yükseklik 2.44 m. ]]
+function Pitch.buildObstacles(cfg)
+	local c = cfg or Config
+	local PP = c.PITCH
+	local list = {}
+
+	for _, sx in ipairs({ -1, 1 }) do
+		local x = sx * PP.halfLength
+		-- Yan direkler
+		for _, sz in ipairs({ -1, 1 }) do
+			list[#list + 1] = {
+				kind = "post",
+				a = Vec3.new(x, 0, sz * PP.goalHalfWidth),
+				b = Vec3.new(x, PP.goalHeight, sz * PP.goalHalfWidth),
+				radius = PP.postRadius,
+			}
+		end
+		-- Üst direk
+		list[#list + 1] = {
+			kind = "crossbar",
+			a = Vec3.new(x, PP.goalHeight, -PP.goalHalfWidth),
+			b = Vec3.new(x, PP.goalHeight, PP.goalHalfWidth),
+			radius = PP.crossbarRadius,
+		}
+	end
+
+	return list
+end
+
 -- Saha üzerinde deterministik başlangıç pozisyonları (Adım 3: diziliş).
 function Pitch.kickoffSpot(side)
 	return Vec3.new(side * 1.0, Config.BALL.radius, 0)

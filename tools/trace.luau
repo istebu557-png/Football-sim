@@ -50,9 +50,12 @@ local function simulate(opts)
 	local samples = { Vec3.new(from.x, from.y, from.z) }
 	local maxHeight = from.y
 	local goal = nil
+	local goalSpeed = nil
 	local ticks = 240 * (opts.maxSeconds or 4)
 
 	for i = 1, ticks do
+		-- Gol anındaki hızı kaydet: ağ topu tuttuğu için tick sonrası hız 0 olur.
+		local speedBefore = Vec3.length(sim.ball.vel)
 		sim:tick()
 		local p = sim.ball.pos
 		if p.y > maxHeight then
@@ -63,6 +66,7 @@ local function simulate(opts)
 		end
 		if sim.lastGoal then
 			goal = sim.lastGoal.side
+			goalSpeed = speedBefore
 			break
 		end
 		if Pitch.isOutOfPlay(p, R) then
@@ -94,9 +98,10 @@ local function simulate(opts)
 		maxHeight = maxHeight,
 		goal = goal,
 		curve = curve,
+		postHits = sim.ball.postHits,
 		final = sim.ball.pos,
 		speedStart = Vec3.length(velocity),
-		speedEnd = Vec3.length(sim.ball.vel),
+		speedEnd = goalSpeed or Vec3.length(sim.ball.vel),
 		time = sim.time,
 	}
 end
@@ -141,7 +146,20 @@ shots[#shots + 1] = {
 	}),
 }
 
--- 4) Sekme: 2 m'den düşen topun dikey izi
+-- 4) Direk: tam direğe nişanlı şut -> sekerek dışarı
+shots[#shots + 1] = {
+	id = "direk",
+	label = "Direk (çarpışma)",
+	desc = "24 m/s, tam direğe nişanlı. Sürekli çarpışma testi topu sektirir: gol değil.",
+	data = simulate({
+		from = Vec3.new(41.5, R, 3.0),
+		to = Vec3.new(52.5, 1.2, 3.66),
+		speed = 24,
+		maxSeconds = 2.2,
+	}),
+}
+
+-- 5) Sekme: 2 m'den düşen topun dikey izi
 local dropshot = { samples = {}, maxHeight = 2, goal = nil, curve = 0 }
 do
 	local b = Ball.new(Config, Vec3.new(0, 2 + R, 0))
@@ -159,6 +177,7 @@ do
 	dropshot.final = b.pos
 	dropshot.bounces = b.contacts
 	dropshot.drop = true
+	dropshot.postHits = 0
 end
 shots[#shots + 1] = {
 	id = "sekme",
@@ -188,6 +207,7 @@ for i, shot in ipairs(shots) do
 	out[#out + 1] = '"time":' .. num(d.time or 0) .. ","
 	out[#out + 1] = '"goal":' .. (d.goal and ('"' .. d.goal .. '"') or "null") .. ","
 	out[#out + 1] = '"bounces":' .. tostring(d.bounces or 0) .. ","
+	out[#out + 1] = '"postHits":' .. tostring(d.postHits or 0) .. ","
 	out[#out + 1] = '"type":"' .. (d.drop and "drop" or "shot") .. '",'
 	out[#out + 1] = '"aim":' .. (shot.data.aim and jsonVec(shot.data.aim) or "null")
 	out[#out + 1] = (i < #shots) and "}," or "}"

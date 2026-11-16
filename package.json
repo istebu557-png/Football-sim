@@ -7,7 +7,8 @@
   "scripts": {
     "test": "node tools/runner.js",
     "trace": "node tools/runner.js --trace",
-    "preview": "node tools/serve.js"
+    "preview": "node tools/serve.js",
+    "install:build": "node tools/installer_lib.js"
   },
   "devDependencies": {
     "fengari-node-cli": "^2.4.1"
