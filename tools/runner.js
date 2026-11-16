@@ -79,12 +79,15 @@ parts.push(
     "\nend)()"
 );
 
+// Mod: testler | fizik izi (--trace) | animasyon izi (--anim)
 const traceMode = process.argv.includes("--trace");
-const entry = traceMode ? "trace.luau" : "spec.luau";
+const animMode = process.argv.includes("--anim");
+const entry = traceMode ? "trace.luau" : animMode ? "anim_trace.luau" : "spec.luau";
 parts.push(fs.readFileSync(path.join(ROOT, "tools", entry), "utf8"));
 
 fs.mkdirSync(BUILD, { recursive: true });
-const bundlePath = path.join(BUILD, traceMode ? "trace.lua" : "tests.lua");
+const bundleName = traceMode ? "trace.lua" : animMode ? "anim.lua" : "tests.lua";
+const bundlePath = path.join(BUILD, bundleName);
 fs.writeFileSync(bundlePath, parts.join("\n"));
 
 const bin = path.join(ROOT, "node_modules", ".bin", "fengari");
@@ -93,6 +96,30 @@ const result = spawnSync(bin, [bundlePath], {
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
 });
+
+if (animMode) {
+  if (result.status !== 0) {
+    if (result.stderr) process.stderr.write(result.stderr);
+    process.exit(1);
+  }
+  const outDir = path.join(ROOT, "preview");
+  fs.mkdirSync(outDir, { recursive: true });
+  const json = (result.stdout || "").trim();
+  let parsed = null;
+  try { parsed = JSON.parse(json); } catch (e) { console.error("Gecersiz JSON:", e.message); process.exit(1); }
+  fs.writeFileSync(path.join(outDir, "anim.json"), json);
+  console.log("Animasyon izi yazildi: preview/anim.json (" + (json.length / 1024).toFixed(1) + " KB)");
+  for (const sc of parsed.scenes) {
+    console.log(
+      "  " + sc.label.padEnd(34) +
+      sc.frames.length + " kare  " +
+      (sc.view === "front" ? "onde" : "yandan") +
+      (sc.contact ? "  temas " + sc.contact.toFixed(2) + " s" : "") +
+      (sc.kind ? "  (" + sc.kind + ")" : "")
+    );
+  }
+  process.exit(0);
+}
 
 if (traceMode) {
   if (result.status !== 0) {

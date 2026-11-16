@@ -12,6 +12,9 @@
 ]]
 
 local Config = require(script.Parent.Parent.Config)
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+local PartRig = require(script.Parent.Parent.Anim.PartRig)
+local Rig = require(script.Parent.Parent.Anim.Rig)
 
 local SceneBuilder = {}
 
@@ -285,53 +288,44 @@ local function buildBall()
 	return ball
 end
 
---[[ Kaleci görseli: basit blok gövde + kafa + iki kol.
-	Sunucu her karede bu modeli kaleci AI'sinin konumuna taşır. ]]
+--[[ Kaleci görseli: TAMAMEN prosedürel iskelet (13 parça + 2 eldiven).
+	Hiçbir model/animasyon asset'i yok; parçalar sunucuda FK ile pozlanır.
+	Kaleci sahaya dönük durur: ileri = -side * x̂. ]]
+local function keeperYaw(side)
+	-- forward = (-side, 0, 0) -> yaw = atan2(fz, fx)
+	return atan2(0, -side)
+end
+
 local function buildKeeper(root, side)
 	local K = Config.KEEPER
 	local folder = Instance.new("Folder")
 	folder.Name = "Goalkeeper"
 	folder.Parent = root
 
-	local kit = Color3.fromRGB(250, 214, 60)
-	local skin = Color3.fromRGB(232, 190, 160)
+	local model = PartRig.build(folder, { name = "Rig", studsPerMeter = S })
 	local x = side * (P.halfLength - K.lineOffset)
+	model.x = x
+	model.side = side
+	model.yaw = keeperYaw(side)
+	PartRig.apply(model, nil, Vec3.new(x * S, 0, 0), model.yaw, S)
+	return model
+end
 
-	local body = makePart(
-		folder,
-		"Body",
-		Vector3.new(0.55 * S, 1.15 * S, 0.32 * S),
-		CFrame.new(v3(x, 0.85, 0)),
-		kit,
-		Enum.Material.SmoothPlastic
-	)
-	local head = makePart(
-		folder,
-		"Head",
-		Vector3.new(0.30 * S, 0.30 * S, 0.30 * S),
-		CFrame.new(v3(x, 1.60, 0)),
-		skin,
-		Enum.Material.SmoothPlastic,
-		{ shape = Enum.PartType.Ball }
-	)
-	local armL = makePart(
-		folder,
-		"ArmL",
-		Vector3.new(0.12 * S, 0.70 * S, 0.12 * S),
-		CFrame.new(v3(x, 1.10, -0.36)),
-		kit,
-		Enum.Material.SmoothPlastic
-	)
-	local armR = makePart(
-		folder,
-		"ArmR",
-		Vector3.new(0.12 * S, 0.70 * S, 0.12 * S),
-		CFrame.new(v3(x, 1.10, 0.36)),
-		kit,
-		Enum.Material.SmoothPlastic
-	)
+--[[ Şutçu NPC'si: kaleci ile aynı prosedürel iskelet, farklı forma rengi. ]]
+local function buildStriker(root, side, startPos)
+	local folder = Instance.new("Folder")
+	folder.Name = "Striker"
+	folder.Parent = root
 
-	return { folder = folder, body = body, head = head, armL = armL, armR = armR, x = x }
+	local model = PartRig.build(folder, {
+		name = "Rig",
+		studsPerMeter = S,
+		kitColor = Color3.fromRGB(228, 68, 82),
+	})
+	model.side = side
+	model.pos = startPos
+	PartRig.apply(model, nil, Vec3.new(startPos.x * S, 0, startPos.z * S), 0, S)
+	return model
 end
 
 local function setupLighting()
@@ -409,20 +403,25 @@ function SceneBuilder.build(opts)
 
 	local ball = buildBall()
 	local keeper = buildKeeper(root, goalSide)
-	setupLighting()
-
-	-- Doğma noktası: yarım sahada arka çizginin gerisinde
-	local spawnX = half and 3 or 0
-	buildSpawn(root, spawnX)
 
 	local ballStart = half and Vector3.new((P.halfLength * 0.40) * S, Config.BALL.radius * S, 0)
 		or Vector3.new(0, Config.BALL.radius * S, 0)
+	local strikerStart = Vec3.new(ballStart.X / S - 1.45, 0, 0.75)
+	local striker = buildStriker(root, goalSide, strikerStart)
+	setupLighting()
+
+	-- Doğma noktası: yarım sahada topun gerisinde (animasyonlar görüş alanında)
+	local spawnX = half and (P.halfLength * 0.18) or 0
+	buildSpawn(root, spawnX)
+
 	ball.CFrame = CFrame.new(ballStart)
 
 	return {
 		root = root,
 		ball = ball,
 		keeper = keeper,
+		striker = striker,
+		strikerStart = strikerStart,
 		backNet = backNet,
 		backX = backX,
 		ballStart = ballStart,
@@ -439,33 +438,42 @@ function SceneBuilder.resetBallPosition(positionStuds)
 	end
 end
 
---[[ Kaleci modelini AI durumuna göre taşır (sunucu çağırır). ]]
-function SceneBuilder.updateKeeperModel(keeperModel, keeperState, studsPerMeter)
-	if not keeperModel or not keeperState then
+--[[ Kaleci modelini poza göre konumlandırır (sunucu her karede çağırır).
+	pose: KeeperAnim:sample(t) çıktısı (veya nil = duruş)
+	pos : kaleci AI'sinin konumu (METRE, Vec3) ]]
+function SceneBuilder.updateKeeperModel(keeperModel, pose, pos, studsPerMeter)
+	if not keeperModel then
 		return
 	end
 	local s = studsPerMeter or S
-	local pos = keeperState.pos
-	local x, z = pos.x * s, pos.z * s
-	local diving = keeperState.state == "dive"
-	local lean = 0
-	if diving then
-		lean = keeperState.vel.z / Config.KEEPER.diveSpeed
-		lean = math.max(-1, math.min(1, lean))
-	end
+	local side = keeperModel.side or 1
+	local origin = Vec3.new(pos.x * s, 0, pos.z * s)
+	return PartRig.apply(keeperModel, pose, origin, keeperYaw(side), s)
+end
 
-	if keeperModel.body then
-		keeperModel.body.CFrame = CFrame.new(x, 0.85 * s, z) * CFrame.Angles(0, 0, lean * 0.5)
+--[[ Şutçu modelini poza göre konumlandırır. pos: metre Vec3, yaw: baktığı yön ]]
+function SceneBuilder.updateStrikerModel(strikerModel, pose, pos, yaw, studsPerMeter)
+	if not strikerModel then
+		return
 	end
-	if keeperModel.head then
-		keeperModel.head.CFrame = CFrame.new(x, (1.60 - math.abs(lean) * 0.25) * s, z)
+	local s = studsPerMeter or S
+	local origin = Vec3.new(pos.x * s, 0, pos.z * s)
+	return PartRig.apply(strikerModel, pose, origin, yaw, s)
+end
+
+--[[ Kaleci görselinin dünya uzayındaki el noktaları (hata ayıklama/teşhis). ]]
+function SceneBuilder.keeperHands(keeperModel, pose, pos, studsPerMeter)
+	if not keeperModel then
+		return nil
 	end
-	if keeperModel.armL then
-		keeperModel.armL.CFrame = CFrame.new(x, 1.10 * s, z - 0.36 * s) * CFrame.Angles(lean * 0.9, 0, 0)
+	local s = studsPerMeter or S
+	local solved = SceneBuilder.updateKeeperModel(keeperModel, pose, pos, s)
+	local out = {}
+	for _, side in ipairs({ "L", "R" }) do
+		local hand, forward, right, up = Rig.toWorld(solved.pos["hand" .. side], Vec3.new(pos.x * s, 0, pos.z * s), keeperYaw(keeperModel.side or 1), s)
+		out[side] = hand
 	end
-	if keeperModel.armR then
-		keeperModel.armR.CFrame = CFrame.new(x, 1.10 * s, z + 0.36 * s) * CFrame.Angles(-lean * 0.9, 0, 0)
-	end
+	return out
 end
 
 return SceneBuilder

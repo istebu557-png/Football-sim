@@ -51,6 +51,40 @@ local EnumMock = setmetatable({}, {
 	end,
 })
 
+-- Olay (Signal) taklidi: Connect / Fire. Sunucu döngüsünü testte sürmek için.
+local function makeSignal()
+	local handlers = {}
+	local signal = {}
+	function signal:Connect(fn)
+		handlers[#handlers + 1] = fn
+		return {
+			Disconnect = function()
+				for i = #handlers, 1, -1 do
+					if handlers[i] == fn then
+						table.remove(handlers, i)
+					end
+				end
+			end,
+		}
+	end
+	function signal:Wait()
+		return nil
+	end
+	function signal:Fire(...)
+		local snapshot = {}
+		for i, fn in ipairs(handlers) do
+			snapshot[i] = fn
+		end
+		for _, fn in ipairs(snapshot) do
+			fn(...)
+		end
+	end
+	function signal:HandlerCount()
+		return #handlers
+	end
+	return signal
+end
+
 local function makeClass(className, name)
 	nextId = nextId + 1
 	local obj = {
@@ -182,14 +216,25 @@ function Mock.install()
 	local starterPlayerScripts = makeClass("StarterPlayerScripts", "StarterPlayerScripts")
 	starterPlayerScripts.Parent = starterPlayer
 
+	local runService = makeClass("RunService", "RunService")
+	runService.Heartbeat = makeSignal()
+	runService.RenderStepped = makeSignal()
+
+	local playersService = makeClass("Players", "Players")
+	playersService.PlayerAdded = makeSignal()
+	playersService.PlayerRemoving = makeSignal()
+	playersService.GetPlayers = function()
+		return {}
+	end
+
 	local services = {
 		Workspace = workspace,
 		Lighting = lighting,
 		ReplicatedStorage = replicatedStorage,
 		ServerScriptService = serverScriptService,
 		StarterPlayer = starterPlayer,
-		Players = makeClass("Players", "Players"),
-		RunService = makeClass("RunService", "RunService"),
+		Players = playersService,
+		RunService = runService,
 		UserInputService = makeClass("UserInputService", "UserInputService"),
 	}
 
@@ -205,7 +250,15 @@ function Mock.install()
 
 	local InstanceMock = {
 		new = function(class)
-			return makeClass(class, class)
+			local obj = makeClass(class, class)
+			if class == "RemoteEvent" then
+				obj.OnServerEvent = makeSignal()
+				obj.OnClientEvent = makeSignal()
+				obj.FireServer = function() end
+				obj.FireAllClients = function() end
+				obj.FireClient = function() end
+			end
+			return obj
 		end,
 	}
 
@@ -242,8 +295,20 @@ function Mock.install()
 	set("NumberSequenceKeypoint", { new = function() return {} end })
 	set("ColorSequence", { new = function() return {} end })
 
+	-- Testler sunucu döngüsünü elle sürer
+	local function stepHeartbeat(seconds, dt)
+		dt = dt or 1 / 60
+		local steps = math.floor(seconds / dt)
+		for _ = 1, steps do
+			runService.Heartbeat:Fire(dt)
+		end
+	end
+
 	return {
 		workspace = workspace,
+		runService = runService,
+		players = playersService,
+		stepHeartbeat = stepHeartbeat,
 		lighting = lighting,
 		replicatedStorage = replicatedStorage,
 		serverScriptService = serverScriptService,

@@ -8,7 +8,7 @@
 	  4) Sahne kurulur, scriptler yerleşir. Play'e bas: SPACE ile şut çek.
 
 	Yeniden üretmek için: npm run install:build
-	Kaynak: src/ (17 modül)
+	Kaynak: src/ (26 modül)
 ]]
 
 local SOURCES = {
@@ -120,7 +120,7 @@ hint.BorderSizePixel = 0
 hint.TextColor3 = Color3.fromRGB(232, 240, 246)
 hint.Font = Enum.Font.GothamMedium
 hint.TextSize = 15
-hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   R → topu sıfırla"
+hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   V → izleme kipi   |   R → topu sıfırla"
 hint.Parent = gui
 
 local hintCorner = Instance.new("UICorner")
@@ -178,7 +178,7 @@ if stateRemote then
 			"GOL %d  ·  KURTARIŞ %d  ·  ŞUT %d",
 			payload.goals or 0,
 			payload.saves or 0,
-			payload.kicks or 0
+			(payload.kicks or 0) + (payload.shots or 0)
 		)
 		if payload.event == "goal" then
 			scoreLabel.TextColor3 = Color3.fromRGB(120, 255, 160)
@@ -191,6 +191,9 @@ end
 -- ------------------------------------------------------------ şut / nişan
 local charging = false
 local charge = 0
+-- İzleme kipi (V): kamera topun arkasına geçip kaleyi çerçeveler.
+-- Animasyonları (adaptif şut / kaleci dalışı) yakından izlemek için.
+local spectator = false
 
 local function computeAim()
 	local origin = camera.CFrame.Position
@@ -229,6 +232,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		barBack.Visible = true
 	elseif input.KeyCode == Enum.KeyCode.R and resetRemote then
 		resetRemote:FireServer()
+	elseif input.KeyCode == Enum.KeyCode.V then
+		spectator = not spectator
 	end
 end)
 
@@ -261,14 +266,21 @@ local function onFrame(dt)
 	renderPos = renderPos:Lerp(predicted, k)
 	visual.CFrame = CFrame.new(renderPos)
 
-	-- Kamera: karakterin arkasında, kaleye bakacak şekilde
+	-- Kamera: karakterin arkasında (ya da izleme kipinde topun arkasında)
 	if camera then
 		local focus = renderPos
-		if hrp and hrp.Parent then
-			focus = hrp.Position
+		local desiredPos, desiredLook
+		if spectator then
+			-- Top neredeyse oraya yerleş, kaleyi çerçevele
+			desiredPos = focus + Vector3.new(-26, 15, 7)
+			desiredLook = Vector3.new(GOAL_PLANE, 1.2 * S, 0)
+		else
+			if hrp and hrp.Parent then
+				focus = hrp.Position
+			end
+			desiredPos = focus + Vector3.new(-30, 20, 9)
+			desiredLook = focus + Vector3.new(34, -3, 0)
 		end
-		local desiredPos = focus + Vector3.new(-30, 20, 9)
-		local desiredLook = focus + Vector3.new(34, -3, 0)
 		if not camInit then
 			camPos = desiredPos
 			camLook = desiredLook
@@ -308,18 +320,22 @@ RunService.RenderStepped:Connect(onFrame)
 ]=] },
 	["server/SimLoop"] = { class = "Script", source = [=[
 --[[
-	SimLoop — sunucu otoritesi (Adım 3: yarım saha, 1 kaleci, 1 şutçu).
+	SimLoop — sunucu otoritesi (yarım saha, 1 kaleci, 1 şutçu).
 
 	Akış (her Heartbeat):
-	  1) Kaleci AI'sı bir adım atar (topun geleceğini tahmin eder, dalar).
-	  2) Oyuncuların gerçek karakterlerinden top-oyuncu ilişkisi işlenir
-	     (dokunuş, kapatma, gövde çarpması) — BallControl.
-	  3) Gövdeler (oyuncu + kaleci) simülasyona verilir; top 240 Hz'de ilerler,
-	     gövdelere ve direklere çarpar, kaleye girerse FILE takılır (Net).
-	  4) Görseller güncellenir: top, kaleci modeli, esneyen arka ağ.
-	  5) Gol olursa skor/duyuru, ardından santra.
+	  1) Kaleci AI'sı bir adım atar: topun kale düzlemine varacağı noktayı ve
+	     yüksekliğini tahmin eder, dalış hedefini kilitler.
+	  2) Şutçu NPC'si topa yürür, ayak mesafesine gelince topun gerçek konumuna
+	     göre adaptif şut pozisyonu seçer.
+	  3) Oyuncuların top-oyuncu ilişkisi işlenir (dokunuş, kapatma, gövde).
+	  4) Gövdeler simülasyona verilir; top 240 Hz'de ilerler, direklere/gövdelere
+	     çarpar, kaleye girerse FILE takılır (Net).
+	  5) ANİMASYON (tamamen kodla, asset yok): kaleci dalışı, şutçu şutu ve
+	     oyuncunun R15 eklemleri sunucuda FK ile pozlanır.
+	  6) Görseller güncellenir; gol olursa skor + santra.
 
-	Top her zaman sunucuda simüle edilir; istemci yalnızca istek gönderir.
+	Animasyon nedenseldir: şutun topu bıraktığı an, animasyonun TEMAS anıdır
+	(0.24 s). Oyuncu şut tuşuna bastığında top hemen ayrılmaz; savurma tamamlanır.
 ]]
 
 local Players = game:GetService("Players")
@@ -336,15 +352,21 @@ local SceneBuilder = require(Shared.World.SceneBuilder)
 local Net = require(Shared.Physics.Net)
 local BallControl = require(Shared.Player.BallControl)
 local Keeper = require(Shared.Player.Keeper)
+local Striker = require(Shared.Player.Striker)
+local KeeperAnim = require(Shared.Anim.KeeperAnim)
+local KickAnim = require(Shared.Anim.KickAnim)
+local HumanoidPose = require(Shared.Anim.HumanoidPose)
 
 local S = Config.STUDS_PER_METER
 local R = Config.BALL.radius
 local P = Config.PITCH
+local ANIM = Config.ANIM or {}
 
 -- ---------------------------------------------------------------- 1) Sahne
 local scene = SceneBuilder.build({ half = true, goalSide = 1 })
 local ballPart = scene.ball
 local keeperModel = scene.keeper
+local strikerModel = scene.striker
 local backNet = scene.backNet
 local backNetX = scene.backX -- metre
 
@@ -354,6 +376,7 @@ local goalNet = Net.new(Config, scene.goalSide)
 sim.nets[1] = goalNet
 
 local keeper = Keeper.new(Config, scene.goalSide)
+local striker = Striker.new(Config, { side = scene.goalSide, pos = scene.strikerStart })
 local rng = Rng.new(4242)
 
 local controls = {}
@@ -366,7 +389,7 @@ local function getControl(player)
 	return c
 end
 
-local stats = { goals = 0, saves = 0, kicks = 0 }
+local stats = { goals = 0, saves = 0, kicks = 0, shots = 0 }
 
 -- -------------------------------------------------------------- 3) Remotes
 local remotes = ReplicatedStorage:FindFirstChild("Remotes")
@@ -415,12 +438,21 @@ local function resetBall()
 		Vec3.new(0, 0, 0)
 	)
 	goalNet:resetSag()
+	-- Şutçu da başlangıç noktasına döner
+	striker.pos = scene.strikerStart
+	striker.vel = Vec3.new(0, 0, 0)
+	striker.kick = nil
+	striker.kickT = 0
+	striker.cooldown = 0.6
+	striker.walkPhase = 0
 end
 
 resetBall()
 
 -- --------------------------------------------------------------- 5) Şut
+-- Oyuncunun şutu: tuşa basıldığında pozisyon seçilir, top TEMAS anında ayrılır.
 local lastKickAt = {}
+local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 
 kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 	local now = os.clock()
@@ -435,6 +467,9 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 
 	local control = getControl(player)
 	if not control:canKick(sim.ball, state) then
+		return
+	end
+	if pending[player] then
 		return
 	end
 
@@ -453,20 +488,31 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 		return
 	end
 	local lateral = math.tan(errRad) * dist
-	local aim = Vec3.new(P.halfLength, targetY, targetZ + lateral)
+
+	-- Topun oyuncuya göre konumu -> adaptif şut pozisyonu (hangi ayak, vole mi?)
+	local toBall = Vec3.withY(Vec3.sub(sim.ball.pos, state.pos), 0)
+	local forward = Vec3.new(math.cos(state.facing), 0, math.sin(state.facing))
+	local right = Vec3.cross(forward, Vec3.new(0, 1, 0))
+	local kick = KickAnim.new({
+		ballHeight = sim.ball.pos.y,
+		ballLateral = Vec3.dot(toBall, right),
+		ballForward = Vec3.dot(toBall, forward),
+		charge = c,
+	})
 
 	local speed = control:speedForCharge(c)
-	local velocity = Ballistics.solveLaunch(sim.ball.pos, aim, speed, Config.GRAVITY)
-	if not velocity then
-		return
-	end
+	-- Falso: alçak şut topspin, yüksek köşe backspin (Ballistics.shotSpin)
+	local spin = Ballistics.shotSpin(speed, targetY, targetZ)
 
-	-- Topspin: güç arttıkça artar (top fileye girerken "dalan" bir şut)
-	local backspin = (c < 0.2) and 12 or 0 -- çok yavaş vuruşta hafif aşırtma
-	local spin = Vec3.new(0, rng:symmetric(10), -math.min(70, speed * 1.6) + backspin)
-
-	control:kick(sim.ball, state, velocity, spin, sim.time)
-	stats.kicks = stats.kicks + 1
+	pending[player] = {
+		t = 0,
+		kick = kick,
+		speed = speed,
+		aimY = targetY,
+		aimZ = targetZ + lateral,
+		spin = Vec3.add(spin, Vec3.new(0, rng:symmetric(10), 0)),
+		fired = false,
+	}
 end)
 
 resetRemote.OnServerEvent:Connect(function()
@@ -478,12 +524,45 @@ local resetTimer = 0
 local idleTime = 0
 local lastKeeperHits = 0
 
+local keeperAnim = nil
+local keeperAnimT = 0
+local keeperDiveRef = nil
+
+local READY_POSE = KeeperAnim.new({ dz = 0, height = 0.5 }):sample(0.15).pose
+
+-- Kaleci pozu: dalış hedefi değiştiğinde yeni animasyon başlar
+local function keeperPose(dt)
+	if not ANIM.keeperPoseEnabled then
+		return nil
+	end
+	local target = keeper.diveTarget
+	if target and target ~= keeperDiveRef then
+		keeperDiveRef = target
+		keeperAnim = KeeperAnim.new({
+			dz = target.dz,
+			height = target.height,
+			speed = target.speed,
+		})
+		keeperAnimT = 0
+	end
+	if keeperAnim then
+		keeperAnimT = keeperAnimT + dt
+		if keeperAnimT < keeperAnim:duration() then
+			return keeperAnim:sample(keeperAnimT).pose
+		end
+		keeperAnim = nil
+		keeperDiveRef = keeper.diveTarget
+	end
+	return READY_POSE
+end
+
 local function broadcastState(event, extra)
 	if stateRemote then
 		stateRemote:FireAllClients({
 			goals = stats.goals,
 			saves = stats.saves,
 			kicks = stats.kicks,
+			shots = stats.shots,
 			sag = goalNet.sag,
 			event = event,
 			extra = extra,
@@ -502,20 +581,59 @@ RunService.Heartbeat:Connect(function(frameDt)
 	-- 1) Kaleci
 	local keeperBody = keeper:step(sim.ball, frameDt)
 
-	-- 2) Oyuncular: dokunuş / kapatma / gövde
-	for _, player in ipairs(Players:GetPlayers()) do
-		local state = playerState(player)
-		if state then
-			local event = getControl(player):update(sim.ball, state, sim.time)
-			if event == "trap" then
-				-- ilk dokunuş: top yavaşladı
-			elseif event == "touch" then
-				-- top sürme dokunuşu
+	-- 2) Şutçu NPC: yürü -> şut pozisyonu -> TEMAS anında top ayrılır
+	if ANIM.strikerEnabled and strikerModel then
+		local shot = striker:step(frameDt, sim.ball)
+		if shot and shot.type == "shoot" then
+			local velocity = Ballistics.solveLaunch(sim.ball.pos, shot.target, shot.speed, Config.GRAVITY)
+			if velocity then
+				sim.ball.vel = velocity
+				sim.ball.spin = Ballistics.shotSpin(shot.speed, shot.target.y, shot.target.z)
+				sim.ball.mode = "air"
+				stats.shots = stats.shots + 1
 			end
+		end
+		SceneBuilder.updateStrikerModel(strikerModel, striker:pose(), striker.pos, striker.facing, S)
+	end
+
+	-- 3) Oyuncuların şutları: savurma tamamlanınca top ayrılır
+	for player, shot in pairs(pending) do
+		shot.t = shot.t + frameDt
+		if not shot.fired and shot.t >= KickAnim.CONTACT_TIME then
+			shot.fired = true
+			local velocity = Ballistics.solveLaunch(
+				sim.ball.pos,
+				Vec3.new(P.halfLength, shot.aimY, shot.aimZ),
+				shot.speed,
+				Config.GRAVITY
+			)
+			if velocity then
+				getControl(player):kick(sim.ball, nil, velocity, shot.spin, sim.time)
+				stats.kicks = stats.kicks + 1
+			end
+		end
+		-- Sunucu tarafı R15 pozu (deneysel; Config.ANIM.poseHumanoid ile kapanır)
+		local character = player.Character
+		if ANIM.poseHumanoid and character and HumanoidPose.supported(character) then
+			HumanoidPose.apply(character, shot.kick:sample(shot.t).pose)
+		end
+		if shot.t >= shot.kick:duration() then
+			if character and ANIM.poseHumanoid then
+				HumanoidPose.clear(character)
+			end
+			pending[player] = nil
 		end
 	end
 
-	-- 3) Gövdeleri simülasyona ver (240 Hz çarpışma için)
+	-- 4) Oyuncular: dokunuş / kapatma / gövde
+	for _, player in ipairs(Players:GetPlayers()) do
+		local state = playerState(player)
+		if state then
+			getControl(player):update(sim.ball, state, sim.time)
+		end
+	end
+
+	-- 5) Gövdeleri simülasyona ver (240 Hz çarpışma için)
 	local bodies = {}
 	for _, player in ipairs(Players:GetPlayers()) do
 		local state = playerState(player)
@@ -533,14 +651,14 @@ RunService.Heartbeat:Connect(function(frameDt)
 	bodies[#bodies + 1] = keeperBody
 	sim.bodies = bodies
 
-	-- 4) Simülasyon
+	-- 6) Simülasyon (240 Hz sabit adım)
 	sim:update(frameDt)
 
-	-- 5) Görseller
+	-- 7) Görseller + animasyon
 	local bp = sim.ball.pos
 	ballPart.CFrame = CFrame.new(bp.x * S, bp.y * S, bp.z * S)
 
-	SceneBuilder.updateKeeperModel(keeperModel, keeper, S)
+	SceneBuilder.updateKeeperModel(keeperModel, keeperPose(frameDt), keeper.pos, S)
 	backNet.CFrame = CFrame.new((backNetX + goalNet.sag) * S, (P.goalHeight / 2) * S, 0)
 
 	-- Kurtarış sayacı
@@ -550,7 +668,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 	end
 	lastKeeperHits = keeperBody.hits or 0
 
-	-- 6) Gol
+	-- 8) Gol
 	if sim.lastGoal then
 		local goal = sim.lastGoal
 		sim.lastGoal = nil
@@ -560,13 +678,13 @@ RunService.Heartbeat:Connect(function(frameDt)
 		broadcastState("goal", { side = goal.side, speed = sim.ball:speed() })
 		print(string.format(
 			"[MAC] GOL | toplam %d gol, %d kurtaris, %d sut | ag esnemesi %.2f m",
-			stats.goals, stats.saves, stats.kicks, goalNet.sag
+			stats.goals, stats.saves, stats.kicks + stats.shots, goalNet.sag
 		))
 		return
 	end
 
-	-- Top boşta kalırsa demo şutu (sahne canlı kalsın)
-	if sim.ball:speed() < 0.2 and resetTimer <= 0 then
+	-- Şutçu kapalıysa: top boşta kalırsa demo şutu (sahne canlı kalsın)
+	if not ANIM.strikerEnabled and sim.ball:speed() < 0.2 and resetTimer <= 0 then
 		idleTime = idleTime + frameDt
 		if idleTime > 12 then
 			idleTime = 0
@@ -585,13 +703,1150 @@ end)
 Players.PlayerRemoving:Connect(function(player)
 	controls[player] = nil
 	lastKickAt[player] = nil
+	pending[player] = nil
 end)
 
 print(string.format(
-	"[FootballSim] Hazir | yarim saha | 1 kaleci | top fizigi %d Hz | %d direk engeli",
+	"[FootballSim] Hazir | yarim saha | 1 kaleci + 1 sutcu (prosedurel iskelet) | top fizigi %d Hz | %d direk engeli",
 	Config.SIM_HZ,
 	#sim.obstacles
 ))
+]=] },
+	["shared/Anim/Ease"] = { class = "ModuleScript", source = [=[
+--[[
+	Ease — animasyon eğrileri.
+
+	Gerçek hareketler sabit hızda olmaz: kaslar hızlanır, eklemler yumuşar.
+	Buradaki eğriler, "takvim" tabanlı animasyonların temel taşı.
+]]
+
+local Ease = {}
+
+function Ease.clamp01(v)
+	if v < 0 then
+		return 0
+	elseif v > 1 then
+		return 1
+	end
+	return v
+end
+
+-- t'yi [a,b] aralığından [0,1]'e normalize eder (dışarısı kırpılır)
+function Ease.segment(t, a, b)
+	if b <= a then
+		return t >= b and 1 or 0
+	end
+	return Ease.clamp01((t - a) / (b - a))
+end
+
+-- Yumuşak başlangıç/bitiş (3t² - 2t³)
+function Ease.smoothstep(x)
+	local t = Ease.clamp01(x)
+	return t * t * (3 - 2 * t)
+end
+
+-- Hızlı başlar, yavaş biter
+function Ease.outCubic(x)
+	local t = Ease.clamp01(x)
+	return 1 - (1 - t) ^ 3
+end
+
+-- Yavaş başlar, hızlanır (vuruş öncesi savurma)
+function Ease.inCubic(x)
+	local t = Ease.clamp01(x)
+	return t * t * t
+end
+
+-- 0 -> 1 -> 0 (darbe/uzanma eğrisi)
+function Ease.pulse(x)
+	local t = Ease.clamp01(x)
+	return math.sin(t * math.pi)
+end
+
+function Ease.lerp(a, b, t)
+	return a + (b - a) * t
+end
+
+--[[ Aşamalı geçiş: verilen zaman noktalarında (keys) değerleri tutar,
+	aralarda yumuşak geçiş yapar. keys = { {t=0, v=0}, {t=0.2, v=1}, ... } ]]
+function Ease.track(t, keys)
+	if #keys == 0 then
+		return 0
+	end
+	if t <= keys[1].t then
+		return keys[1].v
+	end
+	for i = 2, #keys do
+		local a, b = keys[i - 1], keys[i]
+		if t <= b.t then
+			local f = Ease.smoothstep(Ease.segment(t, a.t, b.t))
+			return Ease.lerp(a.v, b.v, f)
+		end
+	end
+	return keys[#keys].v
+end
+
+return Ease
+]=] },
+	["shared/Anim/HumanoidPose"] = { class = "ModuleScript", source = [=[
+--[[
+	HumanoidPose — R15 karakterinin eklemlerini sunucudan, kodla sürmek.
+
+	Roblox'ta bir karakterin hareketi normalde yayınlanmış Animation asset'leriyle
+	oynar. Burada asset yok: Motor6D.Transform her karede yazılıyor. Bu, Animator
+	sisteminin kullandığı mekanizmanın aynısı (C0 * Transform * C1^-1), yani
+	kemik hiyerarşisi ve kemik uzunlukları korunur.
+
+	Eksen dönüşümü (Rig -> Roblox karakteri):
+		Rig: +x sağ, +y yukarı, +z İLERİ
+		Roblox karakteri: +x sağ, +y yukarı, -z ileri (LookVector = -Z)
+		Ayna dönüşümü olduğu için Euler işaretleri: (x, y, z) -> (-x, -y, +z)
+
+	Bu modül yalnızca R15 karakterlerde çalışır (R6'da sessizce hiçbir şey yapmaz).
+	Karakterin kendi Animate script'i de Transform yazdığı için görsel çakışma
+	olabilir: Config.ANIM.poseHumanoid = false ile kapatılabilir.
+]]
+
+local HumanoidPose = {}
+
+-- Motor6D adı -> Rig eklemi
+local JOINTS = {
+	{ motor = "Waist", joint = "spine" },
+	{ motor = "Neck", joint = "neck" },
+	{ motor = "LeftHip", joint = "hipL" },
+	{ motor = "LeftKnee", joint = "kneeL" },
+	{ motor = "LeftAnkle", joint = "ankleL" },
+	{ motor = "RightHip", joint = "hipR" },
+	{ motor = "RightKnee", joint = "kneeR" },
+	{ motor = "RightAnkle", joint = "ankleR" },
+	{ motor = "LeftShoulder", joint = "shoulderL" },
+	{ motor = "LeftElbow", joint = "elbowL" },
+	{ motor = "RightShoulder", joint = "shoulderR" },
+	{ motor = "RightElbow", joint = "elbowR" },
+}
+
+-- karakter -> { {motor, joint} ... } (zayıf önbellek)
+local cache = setmetatable({}, { __mode = "k" })
+
+local function collect(character)
+	local found = cache[character]
+	if found then
+		return found
+	end
+	found = {}
+	for _, map in ipairs(JOINTS) do
+		local motor = character:FindFirstChild(map.motor, true)
+		if motor and motor:IsA("Motor6D") then
+			found[#found + 1] = { motor = motor, joint = map.joint }
+		end
+	end
+	cache[character] = found
+	return found
+end
+
+--[[ Karakterin R15 eklemleri var mı? (yoksa sessizce false) ]]
+function HumanoidPose.supported(character)
+	if not character then
+		return false
+	end
+	return #collect(character) >= 8
+end
+
+local function anglesFor(pose, jointName)
+	local a = pose and pose[jointName]
+	if not a then
+		return nil
+	end
+	local x, y, z = a.x or 0, a.y or 0, a.z or 0
+	if x == 0 and y == 0 and z == 0 then
+		return nil
+	end
+	return -x, -y, z
+end
+
+--[[ Pozu uygular. pose = KickAnim:sample(t).pose (veya nil = dinlenme) ]]
+function HumanoidPose.apply(character, pose)
+	local joints = collect(character)
+	if #joints == 0 then
+		return false
+	end
+	for _, entry in ipairs(joints) do
+		local x, y, z = anglesFor(pose, entry.joint)
+		if x then
+			entry.motor.Transform = CFrame.Angles(x, y, z)
+		else
+			entry.motor.Transform = CFrame.new()
+		end
+	end
+	return true
+end
+
+--[[ Karakteri motorun kendi animasyonuna bırakır ]]
+function HumanoidPose.clear(character)
+	local joints = collect(character)
+	for _, entry in ipairs(joints) do
+		entry.motor.Transform = CFrame.new()
+	end
+	cache[character] = nil
+end
+
+HumanoidPose.JOINTS = JOINTS
+
+return HumanoidPose
+]=] },
+	["shared/Anim/KeeperAnim"] = { class = "ModuleScript", source = [=[
+--[[
+	KeeperAnim — topa göre değişen adaptif kaleci hareketi.
+
+	Kaleci "hangi topa nasıl atlayacağını" kendisi seçer; poz her kurtarışta
+	topun tahmini varış noktasından yeniden üretilir:
+
+	  |dz| < 0.5 m ve alçak  -> "block" : ayakta kalır, kollar öne, dizler kırık
+	  yüksek top (>1.45 m)   -> "jump"  : zıplar, kollar yukarı, bacaklar toplanır
+	  yana uzak top          -> "dive"  : gövde yana devrilir, kollar o tarafa uzanır
+	  yan + yüksek           -> "jumpDive": zıplayarak yana uzanır
+
+	Uzanma miktarı topun ne kadar uzağa gideceğine bağlı (0.35-1.0 m). Bu öteleme
+	sunucuda KALECİNİN FİZİKSEL GÖVDESİNE de uygulanır; yani dalış yapan kaleci
+	gerçekten daha uzağa uzanır (görsel ile fizik ayrışmaz).
+
+	Zaman çizelgesi:
+	  0.00-0.10  hazırlık (hafif çömelme, ters yöne ağırlık)
+	  0.10-0.35  fırlama/uzanma
+	  0.35-0.62  zirve (havada/zemin temas)
+	  0.62-0.95  toparlanma
+
+	sample(t) -> { pose = <poz>, contact = false }
+	(KickAnim ile aynı sözleşme: her aksiyon animasyonu poz tablosu döndürür.)
+]]
+
+local Ease = require(script.Parent.Ease)
+local Pose = require(script.Parent.Pose)
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+
+local KeeperAnim = {}
+KeeperAnim.__index = KeeperAnim
+
+KeeperAnim.DURATION = 0.95
+
+local clamp01 = Ease.clamp01
+
+--[[ opts:
+	dz     : topun kaleciye göre yanal varış noktası (m, + = kaleci sağı)
+	height : varış noktasındaki yükseklik (m)
+	speed  : topun hızı (m/s) — sertlik/tepki ayarı
+]]
+function KeeperAnim.new(opts)
+	opts = opts or {}
+	local dz = opts.dz or 0
+	local height = opts.height or 0.5
+	local absDz = math.abs(dz)
+	local dir = (dz >= 0) and 1 or -1
+	local speed = opts.speed or 15
+
+	local kind
+	if height >= 1.45 and absDz < 0.55 then
+		kind = "jump"
+	elseif height >= 1.45 then
+		kind = "jumpDive"
+	elseif absDz < 0.5 then
+		kind = "block"
+	else
+		kind = "dive"
+	end
+
+	-- Uzanma: ne kadar uzağa gidecekse o kadar uzanır (0.35-1.0 m)
+	local reach = math.max(0.35, math.min(1.0, absDz / 1.15))
+	-- Hızlı topa daha sert/çabuk tepki
+	local urgency = clamp01((speed - 10) / 20)
+
+	return setmetatable({
+		kind = kind,
+		dz = dz,
+		height = height,
+		dir = dir,
+		absDz = absDz,
+		reach = reach,
+		urgency = urgency,
+	}, KeeperAnim)
+end
+
+function KeeperAnim:duration()
+	return KeeperAnim.DURATION
+end
+
+-- Uzanma eğrisi: hazırlıktan zirveye, sonra toparlanma
+local function extensionAt(t)
+	return Ease.track(t, {
+		{ t = 0.00, v = 0 },
+		{ t = 0.10, v = -0.12 },
+		{ t = 0.35, v = 1 },
+		{ t = 0.62, v = 1 },
+		{ t = 0.95, v = 0 },
+	})
+end
+
+function KeeperAnim:sample(t)
+	local ext = extensionAt(t)
+	local pose = Pose.new()
+	local kind = self.kind
+	local dir = self.dir
+	local reach = self.reach
+
+	-- Hazırlık: çömelme
+	local crouch = Ease.track(t, {
+		{ t = 0.00, v = 0 },
+		{ t = 0.10, v = 0.10 },
+		{ t = 0.35, v = 0.04 },
+		{ t = 0.95, v = 0 },
+	})
+
+	if kind == "block" then
+		-- Ayakta blok: dizler kırık, kollar öne, ağırlık merkezi alçak
+		local guard = Ease.track(t, {
+			{ t = 0.00, v = 0 },
+			{ t = 0.16, v = 1 },
+			{ t = 0.70, v = 1 },
+			{ t = 0.95, v = 0 },
+		})
+		pose.rootOffset = Vec3.new(0, -0.16 * guard - 0.05 * crouch, 0)
+		pose.spine = Pose.joint(0.18 * guard, -dir * 0.12 * guard, 0)
+		pose.hipL = Pose.joint(-0.42 * guard, 0, -0.10 * guard)
+		pose.hipR = Pose.joint(-0.42 * guard, 0, 0.10 * guard)
+		pose.kneeL = Pose.joint(0.85 * guard, 0, 0)
+		pose.kneeR = Pose.joint(0.85 * guard, 0, 0)
+		pose.shoulderL = Pose.joint(-1.15 * guard, 0, -0.35 * guard)
+		pose.shoulderR = Pose.joint(-1.15 * guard, 0, 0.35 * guard)
+		pose.elbowL = Pose.joint(-0.45 * guard, 0, 0)
+		pose.elbowR = Pose.joint(-0.45 * guard, 0, 0)
+		pose.neck = Pose.joint(-0.10 * guard, 0, 0)
+		return { pose = pose }
+	end
+
+	if kind == "jump" then
+		-- Yüksek top: zıpla, kollar yukarı
+		local air = Ease.track(t, {
+			{ t = 0.00, v = 0 },
+			{ t = 0.10, v = -0.12 },
+			{ t = 0.35, v = 0.52 },
+			{ t = 0.62, v = 0.40 },
+			{ t = 0.95, v = 0 },
+		})
+		pose.rootOffset = Vec3.new(0, air, 0)
+		pose.spine = Pose.joint(0.10, 0, 0)
+		pose.hipL = Pose.joint(-0.55 * ext, 0, -0.08)
+		pose.hipR = Pose.joint(-0.55 * ext, 0, 0.08)
+		pose.kneeL = Pose.joint(1.00 * math.abs(ext), 0, 0)
+		pose.kneeR = Pose.joint(1.00 * math.abs(ext), 0, 0)
+		-- Kollar yukarı (negatif shoulder.x kolu yukarı kaldırır)
+		pose.shoulderL = Pose.joint(-2.45 * ext, 0, -0.25)
+		pose.shoulderR = Pose.joint(-2.45 * ext, 0, 0.25)
+		pose.elbowL = Pose.joint(-0.25, 0, 0)
+		pose.elbowR = Pose.joint(-0.25, 0, 0)
+		pose.neck = Pose.joint(-0.25 * ext, 0, 0)
+		return { pose = pose }
+	end
+
+	-- Yana dalış (dive / jumpDive)
+	local isJump = kind == "jumpDive"
+	local lateral = dir * reach * ext
+	local vertical
+	if isJump then
+		vertical = math.max(0, Ease.track(t, {
+			{ t = 0.00, v = 0 },
+			{ t = 0.10, v = -0.10 },
+			{ t = 0.35, v = 0.46 },
+			{ t = 0.62, v = 0.30 },
+			{ t = 0.95, v = 0 },
+		}))
+	else
+		-- Alçak/düz dalışta gövde yere yaklaşır
+		vertical = -0.30 * math.max(0, ext)
+	end
+
+	pose.rootOffset = Vec3.new(lateral, vertical - 0.08 * crouch, 0)
+
+	-- Gövde yana devrilir (yerel Z ekseni = ileri; roll)
+	pose.root = Pose.joint(0, 0, -dir * (isJump and 0.55 or 1.05) * math.max(0, ext))
+	pose.spine = Pose.joint(0.12, -dir * 0.25 * ext, -dir * 0.20 * ext)
+	pose.neck = Pose.joint(-0.18 * ext, dir * 0.35 * ext, 0)
+
+	-- Kollar topa doğru yana uzanır. Kol -Y'den başlar; Z ekseni abduksiyon
+	-- (yana açma) eksenidir. |z| = 1.9 -> kol yatayın biraz üstünde yana uzar.
+	-- Top yükseldikçe kollar daha yukarı uzanır (yüksek topta parmak ucu)
+	local aimUp = clamp01((self.height - 1.0) / 0.8)
+	-- Yüksek top: kollar neredeyse dümdüz yukarı (parmak ucu), alçak top: yana yatay
+	local armUp = (isJump and 2.15 or 1.93) + 0.85 * aimUp
+	pose.shoulderL = Pose.joint(-0.40 * ext, 0, dir * (armUp + 0.10) * ext)
+	pose.shoulderR = Pose.joint(-0.40 * ext, 0, dir * (armUp + 0.10) * ext)
+	pose.elbowL = Pose.joint(-0.18 * ext, 0, 0)
+	pose.elbowR = Pose.joint(-0.10 * ext, 0, 0)
+
+	-- Bacaklar: dalış yönünün tersine uzanır (denge)
+	pose.hipL = Pose.joint(-0.25 * ext, 0, -dir * 0.30 * ext)
+	pose.hipR = Pose.joint(-0.45 * ext, 0, -dir * 0.15 * ext)
+	pose.kneeL = Pose.joint(0.65 * ext, 0, 0)
+	pose.kneeR = Pose.joint(0.35 * ext, 0, 0)
+
+	return { pose = pose }
+end
+
+return KeeperAnim
+]=] },
+	["shared/Anim/KickAnim"] = { class = "ModuleScript", source = [=[
+--[[
+	KickAnim — TOPA GÖRE DEĞİŞEN adaptif şut hareketi.
+
+	Yayınlanmış animasyon yok: poz, topun oyuncuya göre konumundan ve şut gücünden
+	her seferinde yeniden hesaplanıyor.
+
+	Top nerede?
+	  * yerde (0-0.4 m)     -> "sürükleyici" düz vuruş; ayak kalça hizasından geçer
+	  * bel/bacak (0.4-1.2) -> yarım vole; savurma düzlemi yükselir, gövde geriye yatar
+	  * göğüs/üstü (>1.2)   -> vole; ayak göğüs hizasına kadar çıkar, gövde iyice yatar
+	  * yanda (lateral)     -> o tarafın ayağı, kalça abduksiyonu ile uzanır
+	  * güç (charge)        -> savurma genliği ve takip (follow-through) yüksekliği
+
+	Zaman çizelgesi (saniye):
+		0.00-0.13  hazırlık: arka ayak geriye, diz kırılır, gövde ters döner
+		0.13-0.24  savurma: kalça öne fırlar, diz kontakt anında düzleşir
+		0.24       TEMAS (top bu anda ayrılır)
+		0.24-0.40  takip: bacak yukarıda kalır, gövde döner
+		0.40-0.62  toparlanma: başlangıç pozisyonuna dönüş
+
+	Ölçü birimi radyan; işaretler Rig'in yerel çerçevesine göre:
+		+hip.x  bacağı GERİYE savurur (pozitif dönüş -Y'yi -Z'ye götürür)
+]]
+
+local Ease = require(script.Parent.Ease)
+local Pose = require(script.Parent.Pose)
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+
+local KickAnim = {}
+KickAnim.__index = KickAnim
+
+KickAnim.DURATION = 0.62
+KickAnim.CONTACT_TIME = 0.24
+
+local clamp01 = Ease.clamp01
+
+--[[ opts:
+	ballHeight  : topun yerden yüksekliği (m)
+	ballLateral : topun oyuncunun sağına (+) / soluna (-) uzaklığı (m)
+	ballForward : topun önde (+) / arkada (-) olması (m)
+	charge      : 0..1 şut gücü
+	foot        : "L" | "R" (verilmezse topun yanına göre seçilir)
+]]
+function KickAnim.new(opts)
+	opts = opts or {}
+
+	local charge = clamp01(opts.charge or 0.7)
+	local height = math.max(0, opts.ballHeight or 0.11)
+	local lateral = opts.ballLateral or 0
+	local forward = opts.ballForward or 0.8
+
+	local foot = opts.foot
+	if not foot then
+		foot = (lateral >= 0) and "R" or "L"
+	end
+
+	-- Yüksek top -> vole: savurma düzlemi yükselir
+	local tall = clamp01((height - 0.45) / 1.1)
+	-- Genlik güçle artar
+	local amp = 0.82 + 0.42 * charge
+	-- Yana uzanma (kalça abduksiyonu)
+	local reach = math.max(-1, math.min(1, lateral / 0.55))
+	-- Top çok gerideyse daha kısa, daha kontrollü vuruş
+	local behind = math.max(-1, math.min(0, forward / 0.6))
+
+	return setmetatable({
+		charge = charge,
+		height = height,
+		lateral = lateral,
+		forward = forward,
+		foot = foot,
+		otherFoot = foot == "R" and "L" or "R",
+		tall = tall,
+		amp = amp,
+		reach = reach,
+		behind = behind,
+	}, KickAnim)
+end
+
+function KickAnim:duration()
+	return KickAnim.DURATION
+end
+
+function KickAnim:contactTime()
+	return KickAnim.CONTACT_TIME
+end
+
+--[[ Verilen an için poz ü retir. Dönüş: { pose = <poz>, contact = bool } ]]
+function KickAnim:sample(t)
+	local amp = self.amp
+	local tall = self.tall
+	local reach = self.reach
+	local contact = t >= KickAnim.CONTACT_TIME
+
+	-- Yüksek topta bacak daha yukarı çıkar (negatif hip = öne)
+	-- Yüksek top: kalça 2.2 rad'e kadar bükülür (gerçek bir yüksek vole sınırı)
+	local swingHigh = 0.55 + 1.20 * tall
+	local backAngle = 0.85 * amp
+	local contactAngle = -(swingHigh * amp)
+	local followAngle = -((swingHigh + 0.45) * amp)
+
+	local hipX = Ease.track(t, {
+		{ t = 0.00, v = 0 },
+		{ t = 0.13, v = backAngle },
+		{ t = 0.24, v = contactAngle },
+		{ t = 0.40, v = followAngle },
+		{ t = 0.62, v = 0 },
+	})
+
+	local kneeX = Ease.track(t, {
+		{ t = 0.00, v = 0.08 },
+		{ t = 0.13, v = 1.20 * amp },
+		{ t = 0.24, v = 0.12 + 0.10 * tall },
+		{ t = 0.40, v = 0.55 },
+		{ t = 0.62, v = 0.08 },
+	})
+
+	-- Temas anında ayak bileği gergin (iç üstü / file)
+	local ankleX = Ease.track(t, {
+		{ t = 0.00, v = 0.10 },
+		{ t = 0.13, v = -0.25 },
+		{ t = 0.24, v = 0.35 },
+		{ t = 0.40, v = 0.10 },
+		{ t = 0.62, v = 0.10 },
+	})
+
+	-- Destek bacağı: yüksek topta daha çok kırılır, gövde dengelenir
+	local supportHip = -(0.10 + 0.22 * tall)
+	local supportKnee = 0.18 + 0.38 * tall + 0.15 * math.abs(reach)
+
+	-- Gövde: savurmada ters döner, temasta döner; yüksek topta geriye yatar
+	local spineY = Ease.track(t, {
+		{ t = 0.00, v = 0 },
+		{ t = 0.13, v = 0.34 * amp },
+		{ t = 0.24, v = -0.30 * amp },
+		{ t = 0.40, v = -0.42 * amp },
+		{ t = 0.62, v = 0 },
+	})
+	local spineX = 0.10 + 0.42 * tall -- yüksek top: gövde geriye
+	local spineZ = -0.22 * reach
+
+	local shoulderSwing = Ease.track(t, {
+		{ t = 0.00, v = 0 },
+		{ t = 0.13, v = -0.45 },
+		{ t = 0.24, v = 0.55 },
+		{ t = 0.40, v = 0.70 },
+		{ t = 0.62, v = 0 },
+	})
+
+	local bob = Ease.track(t, {
+		{ t = 0.00, v = 0 },
+		{ t = 0.13, v = -0.045 },
+		{ t = 0.28, v = -0.015 },
+		{ t = 0.62, v = 0 },
+	})
+
+	local pose = Pose.new()
+	pose.rootOffset = Vec3.new(0, bob, 0)
+
+	-- Gövde ve baş
+	pose.spine = Pose.joint(spineX, spineY, spineZ)
+	pose.neck = Pose.joint(0.12 + 0.10 * (1 - tall), -spineY * 0.5, 0)
+	pose.head = Pose.joint(0.05, 0, 0)
+
+	-- Vuran bacak
+	local kickHip = pose["hip" .. self.foot]
+	kickHip = Pose.joint(hipX, 0.12 * self.reach, (self.foot == "R" and -1 or 1) * 0.22 * math.abs(reach))
+	pose["hip" .. self.foot] = kickHip
+	pose["knee" .. self.foot] = Pose.joint(kneeX, 0, 0)
+	pose["ankle" .. self.foot] = Pose.joint(ankleX, 0, 0)
+
+	-- Destek bacağı (top yoksa da ağırlık merkezi desteklenir)
+	pose["hip" .. self.otherFoot] = Pose.joint(supportHip, 0, 0)
+	pose["knee" .. self.otherFoot] = Pose.joint(supportKnee, 0, 0)
+	pose["ankle" .. self.otherFoot] = Pose.joint(-0.12 - 0.2 * tall, 0, 0)
+
+	-- Kollar: karşı kol denge için açılır
+	local otherArm = (self.foot == "R") and "L" or "R"
+	local kickArm = (self.foot == "R") and "R" or "L"
+	pose["shoulder" .. otherArm] = Pose.joint(-0.25 + shoulderSwing, 0.15, 0.55 + 0.25 * tall)
+	pose["elbow" .. otherArm] = Pose.joint(-0.35 - 0.2 * math.abs(shoulderSwing), 0, 0)
+	pose["shoulder" .. kickArm] = Pose.joint(0.30 - shoulderSwing * 0.7, 0, -0.30)
+	pose["elbow" .. kickArm] = Pose.joint(-0.45, 0, 0)
+
+	return { pose = pose, contact = contact }
+end
+
+return KickAnim
+]=] },
+	["shared/Anim/PartRig"] = { class = "ModuleScript", source = [=[
+--[[
+	PartRig — prosedürel iskeleti gerçek Roblox parçalarına çevirir.
+
+	Kaleci (ve gerektiğinde herhangi bir NPC) için tek bir model asset'i
+	kullanılmaz: 13 parça `Instance.new("Part")` ile kodla üretilir, her karede
+	sunucuda FK ile konumlandırılır. Motor6D / Animation / asset ID YOKTUR.
+	Parçalar Anchored olduğu için CFrame yazmak yeterli; istemciye sadece
+	parçaların CFrame'i replike olur.
+
+	Yerleşim (Rig.toWorld):
+		rig +x -> oyuncunun SAĞI
+		rig +y -> yukarı
+		rig +z -> oyuncunun İLERİSİ (baktığı yön)
+
+	Aynı iskelet (Rig.luau) hem ölçüm testlerinde hem görselde kullanıldığı için
+	"görünen" hareket ile "hesaplanan" hareket birebir aynıdır.
+]]
+
+local Rig = require(script.Parent.Rig)
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+
+local PartRig = {}
+
+local KIT = Color3.fromRGB(250, 214, 60)
+local KIT_DARK = Color3.fromRGB(30, 44, 66)
+local SKIN = Color3.fromRGB(232, 190, 160)
+local SOCK = Color3.fromRGB(240, 244, 250)
+local BOOT = Color3.fromRGB(24, 24, 28)
+local GLOVE = Color3.fromRGB(245, 245, 250)
+
+-- bone -> görsel stil
+local STYLE = {
+	pelvis = { base = KIT_DARK, fat = 1.20, torso = true },
+	torso = { base = KIT, fat = 1.10, torso = true },
+	head = { base = SKIN, fat = 1.00, ball = true },
+	upperArmL = { base = KIT, fat = 1.00 },
+	forearmL = { base = SKIN, fat = 1.00 },
+	upperArmR = { base = KIT, fat = 1.00 },
+	forearmR = { base = SKIN, fat = 1.00 },
+	thighL = { base = KIT_DARK, fat = 1.10 },
+	shinL = { base = SOCK, fat = 1.00 },
+	thighR = { base = KIT_DARK, fat = 1.10 },
+	shinR = { base = SOCK, fat = 1.00 },
+	footL = { base = BOOT, fat = 1.00 },
+	footR = { base = BOOT, fat = 1.00 },
+}
+
+local function makePart(parent, name, size, color, shape)
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanTouch = false
+	p.CanQuery = false
+	p.CastShadow = true
+	p.Size = size
+	p.Color = color
+	p.Material = Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	if shape then
+		p.Shape = shape
+	end
+	p.CFrame = CFrame.new(0, 0, 0)
+	p.Parent = parent
+	return p
+end
+
+local function bonePartName(boneName)
+	return boneName:sub(1, 1):upper() .. boneName:sub(2)
+end
+
+--[[ Model kur.
+	parent: Folder | Model | Workspace
+	opts = { name, studsPerMeter, kitColor }
+	Dönüş: { folder, parts = {bone -> Part}, gloves = {L, R}, studsPerMeter } ]]
+function PartRig.build(parent, opts)
+	opts = opts or {}
+	local s = opts.studsPerMeter or 1
+	local kitColor = opts.kitColor or KIT
+	local lengths = Rig.boneLengths()
+
+	local folder = Instance.new("Folder")
+	folder.Name = opts.name or "Rig"
+	folder.Parent = parent
+
+	local parts = {}
+	for _, bone in ipairs(Rig.bones) do
+		local style = STYLE[bone.name] or { base = kitColor, fat = 1 }
+		local thickness = bone.radius * 2 * (style.fat or 1)
+		local len = lengths[bone.name] or 0.3
+		local color = style.base
+		if style.torso or bone.name:find("Arm") == 1 then
+			color = kitColor
+			if bone.name == "pelvis" then
+				color = KIT_DARK
+			end
+		end
+		parts[bone.name] = makePart(
+			folder,
+			bonePartName(bone.name),
+			Vector3.new(thickness * s, thickness * s, len * s),
+			color,
+			style.ball and Enum.PartType.Ball or nil
+		)
+	end
+
+	local gloves = {}
+	for _, side in ipairs({ "L", "R" }) do
+		gloves[side] = makePart(
+			folder,
+			"Glove" .. side,
+			Vector3.new(0.16 * s, 0.16 * s, 0.16 * s),
+			GLOVE,
+			Enum.PartType.Ball
+		)
+	end
+
+	return {
+		folder = folder,
+		parts = parts,
+		gloves = gloves,
+		studsPerMeter = s,
+		lengths = lengths,
+	}
+end
+
+--[[ Modeli poza göre konumlandırır.
+	pose   : Rig.solve'un beklediği tablo (KickAnim / KeeperAnim çıktısı)
+	origin : ayakların bastığı dünya noktası (STUD, Vector3) veya metre Vec3 + s
+	yaw    : modelin baktığı yön (Vec3.yaw ölçeği: +x'ten +z'ye)
+	s      : stud/metre ]]
+function PartRig.apply(model, pose, origin, yaw, studsPerMeter)
+	if not model then
+		return
+	end
+	local s = studsPerMeter or model.studsPerMeter or 1
+	local solved = Rig.solve(pose)
+
+	local function toStuds(point)
+		return Rig.toWorld(point, origin, yaw, s)
+	end
+
+	for _, bone in ipairs(Rig.bones) do
+		local part = model.parts[bone.name]
+		if part then
+			local a = toStuds(solved.pos[bone.a])
+			local b = toStuds(solved.pos[bone.b])
+			local mid = Vec3.lerp(a, b, 0.5)
+			local style = STYLE[bone.name]
+			if style and style.ball then
+				-- Kafa: kemik ortası değil, eklemden yukarı doğru yarım çap
+				local dir = Vec3.unit(Vec3.sub(b, a))
+				local center = Vec3.add(a, Vec3.scale(dir, bone.radius * 0.55))
+				part.CFrame = CFrame.new(center.x, center.y, center.z)
+			else
+				local dir = Vec3.sub(b, a)
+				if Vec3.length(dir) < 1e-6 then
+					part.CFrame = CFrame.new(mid.x, mid.y, mid.z)
+				else
+					part.CFrame = CFrame.new(mid.x, mid.y, mid.z, b.x, b.y, b.z)
+				end
+			end
+		end
+	end
+
+	-- Eldivenler: el eklemlerinin olduğu yerde
+	for _, side in ipairs({ "L", "R" }) do
+		local glove = model.gloves and model.gloves[side]
+		local hand = solved.pos["hand" .. side]
+		if glove and hand then
+			local w = toStuds(hand)
+			local wrist = toStuds(solved.pos["elbow" .. side])
+			local dir = Vec3.unit(Vec3.sub(w, wrist))
+			local center = Vec3.add(w, Vec3.scale(dir, 0.06))
+			glove.CFrame = CFrame.new(center.x, center.y, center.z)
+		end
+	end
+
+	return solved
+end
+
+return PartRig
+]=] },
+	["shared/Anim/Pose"] = { class = "ModuleScript", source = [=[
+--[[
+	Pose — eklem açılarının (radyan) aritmetiği.
+
+	Bir poz: { jointName = {x=, y=, z=}, rootOffset = Vec3 }
+	Animasyonlar poz üretir, motor bunları karıştırır (yürüme + şut gibi).
+]]
+
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+
+local Pose = {}
+
+function Pose.new()
+	return { rootOffset = Vec3.new(0, 0, 0) }
+end
+
+local function jointOf(pose, name)
+	local j = pose[name]
+	if not j then
+		j = { x = 0, y = 0, z = 0 }
+		pose[name] = j
+	end
+	return j
+end
+
+-- a'ya b'yi ekler (açılar toplanır, öteler vektörel toplanır)
+function Pose.add(a, b)
+	local out = {}
+	for name, j in pairs(a) do
+		if name ~= "rootOffset" then
+			out[name] = { x = j.x or 0, y = j.y or 0, z = j.z or 0 }
+		end
+	end
+	for name, j in pairs(b) do
+		if name ~= "rootOffset" then
+			local target = jointOf(out, name)
+			target.x = target.x + (j.x or 0)
+			target.y = target.y + (j.y or 0)
+			target.z = target.z + (j.z or 0)
+		end
+	end
+	local ao = a.rootOffset or Vec3.ZERO
+	local bo = b.rootOffset or Vec3.ZERO
+	out.rootOffset = Vec3.add(ao, bo)
+	return out
+end
+
+-- a'dan b'ye t oranında geçiş
+function Pose.blend(a, b, t)
+	local out = {}
+	local names = {}
+	for name in pairs(a) do
+		if name ~= "rootOffset" then
+			names[name] = true
+		end
+	end
+	for name in pairs(b) do
+		if name ~= "rootOffset" then
+			names[name] = true
+		end
+	end
+	for name in pairs(names) do
+		local ja = a[name] or { x = 0, y = 0, z = 0 }
+		local jb = b[name] or { x = 0, y = 0, z = 0 }
+		out[name] = {
+			x = (ja.x or 0) + ((jb.x or 0) - (ja.x or 0)) * t,
+			y = (ja.y or 0) + ((jb.y or 0) - (ja.y or 0)) * t,
+			z = (ja.z or 0) + ((jb.z or 0) - (ja.z or 0)) * t,
+		}
+	end
+	out.rootOffset = Vec3.lerp(a.rootOffset or Vec3.ZERO, b.rootOffset or Vec3.ZERO, t)
+	return out
+end
+
+-- Değerleri k ile çarpar (şiddet ölçekleme)
+function Pose.scale(a, k)
+	local out = {}
+	for name, j in pairs(a) do
+		if name ~= "rootOffset" then
+			out[name] = { x = (j.x or 0) * k, y = (j.y or 0) * k, z = (j.z or 0) * k }
+		end
+	end
+	out.rootOffset = Vec3.scale(a.rootOffset or Vec3.ZERO, k)
+	return out
+end
+
+-- Tek eklem için küçük yardımcı
+function Pose.joint(x, y, z)
+	return { x = x or 0, y = y or 0, z = z or 0 }
+end
+
+return Pose
+]=] },
+	["shared/Anim/Rig"] = { class = "ModuleScript", source = [=[
+--[[
+	Rig — prosedürel iskelet ve ileri kinematik (FK).
+
+	Neden? Roblox'ta animasyon normalde yayınlanmış bir Animation asset'i (ID) ile
+	oynatılır. Biz asset YAYINLAMIYORUZ: iskelet tamamen kodla, sunucuda çözülüyor.
+	Böylece poz, topun konumuna/hızına göre milimetre düzeyinde değiştirilebiliyor.
+
+	Yerel koordinat sistemi (sağ el):
+		+x : sağ
+		+y : yukarı
+		+z : ileri (oyuncunun baktığı yön)
+		Tüm ölçüler metre. Köken (0,0,0) = ayakların yere bastığı nokta.
+
+	FK: her eklem, ebeveynine göre bir ofset ve bir Euler dönüşü taşır.
+		worldRot[j] = worldRot[parent] * localRot[j]
+		pos[j]      = pos[parent] + worldRot[parent] * offset[j]
+
+	Dönüş matrisi 3 eksen vektörüyle temsil edilir (kolonlar = yerel eksenlerin
+	görüntüsü). Böylece Lua'da determinant/tuhaflık derdi olmadan çarpım yapılır.
+
+	Rig.solve(pose) -> { pos = {eklem -> Vec3}, bones = { {a, b, radius, name} } }
+
+	Bu modül Roblox API'si kullanmaz: animasyonlar testte ölçülebilir.
+]]
+
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+
+local Rig = {}
+
+local cos, sin = math.cos, math.sin
+
+-- ---------------------------------------------------------------- matrisler
+local IDENTITY = {
+	x = Vec3.new(1, 0, 0),
+	y = Vec3.new(0, 1, 0),
+	z = Vec3.new(0, 0, 1),
+}
+
+local function matVec(m, v)
+	return Vec3.new(
+		m.x.x * v.x + m.y.x * v.y + m.z.x * v.z,
+		m.x.y * v.x + m.y.y * v.y + m.z.y * v.z,
+		m.x.z * v.x + m.y.z * v.y + m.z.z * v.z
+	)
+end
+
+local function matMul(a, b)
+	return {
+		x = matVec(a, b.x),
+		y = matVec(a, b.y),
+		z = matVec(a, b.z),
+	}
+end
+
+local function rotX(a)
+	local c, s = cos(a), sin(a)
+	return { x = Vec3.new(1, 0, 0), y = Vec3.new(0, c, s), z = Vec3.new(0, -s, c) }
+end
+
+local function rotY(a)
+	local c, s = cos(a), sin(a)
+	return { x = Vec3.new(c, 0, -s), y = Vec3.new(0, 1, 0), z = Vec3.new(s, 0, c) }
+end
+
+local function rotZ(a)
+	local c, s = cos(a), sin(a)
+	return { x = Vec3.new(c, s, 0), y = Vec3.new(-s, c, 0), z = Vec3.new(0, 0, 1) }
+end
+
+-- Euler: önce Z (roll), sonra Y (yaw), en son X (pitch) uygulanır.
+function Rig.matFromEuler(angles)
+	if not angles
+		or ((angles.x or 0) == 0 and (angles.y or 0) == 0 and (angles.z or 0) == 0)
+	then
+		return IDENTITY
+	end
+	local m = IDENTITY
+	if angles.z and angles.z ~= 0 then
+		m = matMul(m, rotZ(angles.z))
+	end
+	if angles.y and angles.y ~= 0 then
+		m = matMul(m, rotY(angles.y))
+	end
+	if angles.x and angles.x ~= 0 then
+		m = matMul(m, rotX(angles.x))
+	end
+	return m
+end
+
+Rig.matVec = matVec
+Rig.matMul = matMul
+
+-- --------------------------------------------------------------- iskelet
+-- parent = ebeveyn eklem, offset = ebeveyne göre konum (metre)
+Rig.joints = {
+	{ name = "root", parent = nil, offset = Vec3.new(0, 1.00, 0) },
+	{ name = "spine", parent = "root", offset = Vec3.new(0, 0.14, 0) },
+	{ name = "neck", parent = "spine", offset = Vec3.new(0, 0.30, 0) },
+	{ name = "head", parent = "neck", offset = Vec3.new(0, 0.12, 0) },
+
+	{ name = "shoulderL", parent = "spine", offset = Vec3.new(-0.20, 0.24, 0) },
+	{ name = "elbowL", parent = "shoulderL", offset = Vec3.new(0, -0.28, 0) },
+	{ name = "handL", parent = "elbowL", offset = Vec3.new(0, -0.26, 0) },
+
+	{ name = "shoulderR", parent = "spine", offset = Vec3.new(0.20, 0.24, 0) },
+	{ name = "elbowR", parent = "shoulderR", offset = Vec3.new(0, -0.28, 0) },
+	{ name = "handR", parent = "elbowR", offset = Vec3.new(0, -0.26, 0) },
+
+	{ name = "hipL", parent = "root", offset = Vec3.new(-0.11, -0.05, 0) },
+	{ name = "kneeL", parent = "hipL", offset = Vec3.new(0, -0.45, 0) },
+	{ name = "ankleL", parent = "kneeL", offset = Vec3.new(0, -0.44, 0) },
+	{ name = "toeL", parent = "ankleL", offset = Vec3.new(0, -0.06, 0.13) },
+
+	{ name = "hipR", parent = "root", offset = Vec3.new(0.11, -0.05, 0) },
+	{ name = "kneeR", parent = "hipR", offset = Vec3.new(0, -0.45, 0) },
+	{ name = "ankleR", parent = "kneeR", offset = Vec3.new(0, -0.44, 0) },
+	{ name = "toeR", parent = "ankleR", offset = Vec3.new(0, -0.06, 0.13) },
+}
+
+-- Görsel parçalar: iki eklem arasındaki segmentler
+Rig.bones = {
+	{ name = "pelvis", a = "root", b = "spine", radius = 0.13 },
+	{ name = "torso", a = "spine", b = "neck", radius = 0.15 },
+	{ name = "head", a = "neck", b = "head", radius = 0.11 },
+
+	{ name = "upperArmL", a = "shoulderL", b = "elbowL", radius = 0.055 },
+	{ name = "forearmL", a = "elbowL", b = "handL", radius = 0.048 },
+	{ name = "upperArmR", a = "shoulderR", b = "elbowR", radius = 0.055 },
+	{ name = "forearmR", a = "elbowR", b = "handR", radius = 0.048 },
+
+	{ name = "thighL", a = "hipL", b = "kneeL", radius = 0.075 },
+	{ name = "shinL", a = "kneeL", b = "ankleL", radius = 0.062 },
+	{ name = "footL", a = "ankleL", b = "toeL", radius = 0.055 },
+	{ name = "thighR", a = "hipR", b = "kneeR", radius = 0.075 },
+	{ name = "shinR", a = "kneeR", b = "ankleR", radius = 0.062 },
+	{ name = "footR", a = "ankleR", b = "toeR", radius = 0.055 },
+}
+
+-- --------------------------------------------------------------- çözüm
+--[[ pose = {
+	rootOffset = Vec3 (opsiyonel, tüm gövdeyi öteler),
+	root = {x,y,z}, spine = {...}, hipL = {...}, ... (radyan)
+} ]]
+function Rig.solve(pose)
+	pose = pose or {}
+	local positions = {}
+	local rotations = {}
+
+	for _, joint in ipairs(Rig.joints) do
+		local localRot = Rig.matFromEuler(pose[joint.name])
+		if joint.parent then
+			local parentRot = rotations[joint.parent]
+			local parentPos = positions[joint.parent]
+			rotations[joint.name] = matMul(parentRot, localRot)
+			positions[joint.name] = Vec3.add(parentPos, matVec(parentRot, joint.offset))
+		else
+			rotations[joint.name] = localRot
+			positions[joint.name] = Vec3.new(joint.offset.x, joint.offset.y, joint.offset.z)
+		end
+	end
+
+	-- Tüm gövdeyi ötele (dalış, zıplama, düşme)
+	local offset = pose.rootOffset
+	if offset then
+		for name, p in pairs(positions) do
+			positions[name] = Vec3.add(p, offset)
+		end
+	end
+
+	local bones = {}
+	for _, bone in ipairs(Rig.bones) do
+		bones[#bones + 1] = {
+			name = bone.name,
+			a = positions[bone.a],
+			b = positions[bone.b],
+			radius = bone.radius,
+		}
+	end
+
+	return { pos = positions, bones = bones, rotations = rotations }
+end
+
+-- Dinlenme pozundaki kemik uzunlukları (görsel parça boyutları için)
+local REST_POS = nil
+function Rig.boneLengths()
+	if not REST_POS then
+		REST_POS = Rig.solve({}).pos
+	end
+	local out = {}
+	for _, bone in ipairs(Rig.bones) do
+		out[bone.name] = Vec3.distance(REST_POS[bone.a], REST_POS[bone.b])
+	end
+	return out
+end
+
+-- Yerel (rig) noktayı dünya uzayına çevirir.
+-- origin: ayak noktası, yaw: baktığı yön (Vec3.yaw ile aynı ölçek)
+function Rig.toWorld(localPoint, origin, yaw, studsPerMeter)
+	local s = studsPerMeter or 1
+	local forward = Vec3.new(cos(yaw), 0, sin(yaw))
+	local up = Vec3.new(0, 1, 0)
+	local right = Vec3.cross(forward, up) -- (cos,0,sin) x (0,1,0)
+
+	local world = Vec3.add(origin, Vec3.new(
+		(right.x * localPoint.x + up.x * localPoint.y + forward.x * localPoint.z) * s,
+		(right.y * localPoint.x + up.y * localPoint.y + forward.y * localPoint.z) * s,
+		(right.z * localPoint.x + up.z * localPoint.y + forward.z * localPoint.z) * s
+	))
+	return world, forward, right, up
+end
+
+return Rig
+]=] },
+	["shared/Anim/WalkCycle"] = { class = "ModuleScript", source = [=[
+--[[
+	WalkCycle — prosedürel koşu/yürüme döngüsü.
+
+	Oyuncunun görsel iskeleti (rig) kodla sürüldüğü için yürüme animasyonu da
+	kodla üretilir: kalça salınımı, diz kırılması, kol karşı salınımı ve gövde
+	sekmesi. Adım uzunluğu gerçek mesafeye bağlıdır -> kayma (foot sliding) olmaz.
+
+	faz = kat edilen mesafe / adım döngüsü uzunluğu  (0..1 arası döner)
+]]
+
+local Ease = require(script.Parent.Ease)
+local Pose = require(script.Parent.Pose)
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+
+local WalkCycle = {}
+
+WalkCycle.STRIDE = 1.9 -- bir tam döngüde kat edilen mesafe (m)
+
+--[[ speed: m/s, phase: 0..1, time: saniye (dururken nefes için) ]]
+function WalkCycle.sample(speed, phase, time)
+	local pose = Pose.new()
+	local amp = Ease.clamp01(speed / 7.6)
+	local ph = (phase or 0) * math.pi * 2
+	local s = math.sin(ph)
+	local c = math.cos(ph)
+
+	if amp < 0.05 then
+		-- Duruyor: hafif nefes + ağırlık
+		local breath = math.sin((time or 0) * 1.8) * 0.5 + 0.5
+		pose.spine = Pose.joint(0.04 + 0.02 * breath, 0, 0)
+		pose.shoulderL = Pose.joint(0.04, 0, 0.10 + 0.02 * breath)
+		pose.shoulderR = Pose.joint(0.04, 0, -0.10 - 0.02 * breath)
+		pose.elbowL = Pose.joint(-0.18, 0, 0)
+		pose.elbowR = Pose.joint(-0.18, 0, 0)
+		pose.kneeL = Pose.joint(0.06, 0, 0)
+		pose.kneeR = Pose.joint(0.06, 0, 0)
+		pose.rootOffset = Vec3.new(0, -0.005 * breath, 0)
+		return pose
+	end
+
+	-- Bacaklar: +hip.x geriye savurur
+	pose.hipL = Pose.joint(0.62 * amp * s, 0, 0)
+	pose.hipR = Pose.joint(-0.62 * amp * s, 0, 0)
+
+	-- Diz: bacak geriye giderken kırılır (yerden kaldırma)
+	local kneeL = 0.12 + 0.85 * amp * math.max(0, math.sin(ph + 1.2))
+	local kneeR = 0.12 + 0.85 * amp * math.max(0, math.sin(ph + 1.2 + math.pi))
+	pose.kneeL = Pose.joint(kneeL, 0, 0)
+	pose.kneeR = Pose.joint(kneeR, 0, 0)
+
+	-- Ayak bileği: topuk-parmak yuvarlanması
+	pose.ankleL = Pose.joint(-0.15 * amp * c, 0, 0)
+	pose.ankleR = Pose.joint(0.15 * amp * c, 0, 0)
+
+	-- Kollar karşılıklı salınır
+	pose.shoulderL = Pose.joint(-0.55 * amp * s, 0, 0.12)
+	pose.shoulderR = Pose.joint(0.55 * amp * s, 0, -0.12)
+	pose.elbowL = Pose.joint(-0.45 - 0.25 * amp * math.max(0, s), 0, 0)
+	pose.elbowR = Pose.joint(-0.45 - 0.25 * amp * math.max(0, -s), 0, 0)
+
+	-- Gövde: hafif öne eğik + salınım
+	pose.spine = Pose.joint(0.06 + 0.10 * amp, 0.08 * amp * s, 0)
+	pose.neck = Pose.joint(-0.05 * amp, 0, 0)
+
+	-- Dikey sekme: her adımda iki kez
+	pose.rootOffset = Vec3.new(0, -0.02 * amp * (0.5 + 0.5 * math.cos(2 * ph)), 0)
+
+	return pose
+end
+
+return WalkCycle
 ]=] },
 	["shared/Config"] = { class = "ModuleScript", source = [=[
 --[[
@@ -730,6 +1985,7 @@ Config.KEEPER = {
 	reachZ = 3.15, -- direklerin içinde kalır
 	restitution = 0.45,
 	reactionTime = 0.12,
+	diveReachBonus = 0.14, -- dalışta gövde yarıçapı artışı (uzanan kollar)
 }
 
 --[[ File (ağ) fiziği: top ağda yavaşlar, esnetir, geri sektirmez ]]
@@ -743,6 +1999,14 @@ Config.NET = {
 	sagStiffness = 11.0, -- geri toplama yayı
 	sagDamping = 3.2,
 	sagImpulse = 1.7, -- çarpma hızının esnemeye dönüşümü
+}
+
+--[[ Animasyon: TAMAMEN kodla, sunucuda. Hiçbir yayınlanmış asset yok.
+	Pozlar Anim/Rig (FK) + Anim/KickAnim + Anim/KeeperAnim tarafından üretilir. ]]
+Config.ANIM = {
+	poseHumanoid = true, -- oyuncunun R15 eklemleri sunucudan sürülsün mü (deneysel)
+	strikerEnabled = true, -- prosedürel şutçu NPC'si (sunucu tarafı demo)
+	keeperPoseEnabled = true, -- kaleci iskeleti gerçekten pozlansın mı
 }
 
 Config.MATCH = {
@@ -905,6 +2169,19 @@ end
 -- Verilen hızla hedefe ulaşılabilir mi?
 function Ballistics.isReachable(from, to, speed, gravity)
 	return Ballistics.solveLaunch(from, to, speed, gravity) ~= nil
+end
+
+--[[ Vuruş spinini nişana göre seç.
+	Alçak sürükleyici şut  -> topspin (top yere doğru dalar)
+	Yüksek köşe şutu       -> backspin (top havada kalır, çabuk düşmez)
+	Böylece "1.90 m'ye nişan alınan top 0.60 m'ye iniyor" sorunu kalkar. ]]
+function Ballistics.shotSpin(speed, aimY, aimZ)
+	local topspin = math.min(70, (speed or 20) * 1.6)
+	local loft = math.max(0, math.min(1, ((aimY or 0.8) - 0.7) / 1.3))
+	local z = -topspin * (1 - loft) + 26 * loft
+	-- Hafif yan falso: köşeye vururken top kaleciden uzağa kıvrılır
+	local side = math.max(-1, math.min(1, (aimZ or 0) / 3.0))
+	return Vec3.new(0, -side * 12, z)
 end
 
 return Ballistics
@@ -2220,6 +3497,9 @@ function Keeper.new(cfg, side)
 		state = "idle", -- idle | track | dive
 		reactionTimer = 0,
 		diveTimer = 0,
+		diveElapsed = 0,
+		diveTarget = nil,
+		arrival = nil,
 		hits = 0,
 		saves = 0,
 		conceded = 0,
@@ -2237,23 +3517,30 @@ function Keeper.new(cfg, side)
 	}, Keeper)
 end
 
--- Topun kale çizgisine varacağı z konumunu simülasyon kopyasıyla tahmin eder.
-function Keeper:predictArrivalZ(ball, maxSeconds)
+-- Topun kale düzlemine varacağı noktayı simülasyon kopyasıyla tahmin eder.
+-- Dönüş: { z = yanal konum, y = yükseklik, t = varış süresi (s) }
+function Keeper:predictArrival(ball, maxSeconds)
 	local copy = ball:clone()
 	-- Tahmin 120 Hz'de yapılır: kaleci için yeterli hassasiyet, yarı maliyet
 	local dt = 1 / 120
 	local steps = math.floor((maxSeconds or 2.5) / dt)
 	local P = self.cfg.PITCH
-	for _ = 1, steps do
+	local planeX = P.halfLength - self.cfg.KEEPER.lineOffset
+	for i = 1, steps do
 		copy:step(dt)
-		if copy.pos.x * self.side >= P.halfLength - self.cfg.KEEPER.lineOffset then
-			return copy.pos.z
+		if copy.pos.x * self.side >= planeX then
+			return { z = copy.pos.z, y = copy.pos.y, t = i * dt }
 		end
-		if abs(copy.pos.x) > P.halfLength + P.goalDepth then
-			return copy.pos.z
+		if abs(copy.pos.x) > P.halfLength + P.goalDepth or copy.pos.y < -0.5 then
+			break
 		end
 	end
-	return copy.pos.z
+	return { z = copy.pos.z, y = copy.pos.y, t = steps * dt }
+end
+
+-- Geriye dönük: sadece yanal varış noktası
+function Keeper:predictArrivalZ(ball, maxSeconds)
+	return self:predictArrival(ball, maxSeconds).z
 end
 
 --[[ Bir adım. Dönüş: çarpışma için gövde tanımı. ]]
@@ -2271,9 +3558,10 @@ function Keeper:step(ball, dt)
 	if towardGoal and distanceToLine > 0 and distanceToLine < 18 then
 		self.reactionTimer = self.reactionTimer + dt
 		if self.reactionTimer >= K.reactionTime then
-			local predicted = self:predictArrivalZ(ball, 2.5)
+			local arrival = self:predictArrival(ball, 2.5)
 			-- Kaleci hatası: tepki mesafesiyle artan küçük sapma (deterministik)
-			targetZ = max(-K.reachZ, min(K.reachZ, predicted))
+			targetZ = max(-K.reachZ, min(K.reachZ, arrival.z))
+			self.arrival = arrival
 			wantDive = true
 		else
 			targetZ = max(-K.reachZ, min(K.reachZ, ball.pos.z))
@@ -2309,11 +3597,24 @@ function Keeper:step(ball, dt)
 	end
 
 	if wantDive then
+		if self.state ~= "dive" then
+			-- Dalış başlıyor: animasyon için hedefi kilitle
+			self.diveTarget = {
+				dz = targetZ - self.pos.z,
+				height = (self.arrival and self.arrival.y) or 0.5,
+				speed = ball:speed(),
+				time = (self.arrival and self.arrival.t) or 1,
+			}
+			self.diveElapsed = 0
+		end
 		self.state = "dive"
 		self.diveTimer = self.diveTimer + dt
+		self.diveElapsed = (self.diveElapsed or 0) + dt
 	else
 		self.state = abs(self.vel.z) > 0.5 and "track" or "idle"
 		self.diveTimer = 0
+		self.diveElapsed = 0
+		self.diveTarget = nil
 	end
 
 	-- Dalış sırasında gövde alçalır (daha geniş ama daha kısa)
@@ -2325,7 +3626,8 @@ function Keeper:step(ball, dt)
 	local body = self.body
 	body.pos = Vec3.new(self.pos.x, 0, self.pos.z)
 	body.vel = Vec3.new(0, 0, self.vel.z)
-	body.radius = K.radius
+	-- Dalışta kollar açılır: gövde yarıçapı bir miktar büyür (görsel uzanmayla uyumlu)
+	body.radius = K.radius + (wantDive and K.diveReachBonus or 0)
 	body.height = height
 
 	return body
@@ -2499,6 +3801,205 @@ end
 
 return Locomotion
 ]=] },
+	["shared/Player/Striker"] = { class = "ModuleScript", source = [=[
+--[[
+	Striker — sunucu tarafındaki şutçu NPC'si (prosedürel iskeletle çizilir).
+
+	Neden NPC? Animasyonun tamamı sunucuda, kodla üretiliyor; gerçek bir Roblox
+	karakteri kendi Animate script'iyle çakışır. Bu şutçu:
+	  * topa yürür (adım döngüsü gerçek hıza bağlı: kayma yok),
+	  * ayak mesafesine gelince topun GERÇEK konumuna göre şut pozisyonu seçer,
+	  * temas anında (0.24 s) top ayrılır — animasyon nedensel, süs değil,
+	  * her şutta farklı köşe/yükseklik hedefler: kaleci her seferinde farklı atlar.
+
+	Roblox API'si kullanmaz: aynı kod testte ölçülebilir.
+]]
+
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+local WalkCycle = require(script.Parent.Parent.Anim.WalkCycle)
+local KickAnim = require(script.Parent.Parent.Anim.KickAnim)
+local Ease = require(script.Parent.Parent.Anim.Ease)
+
+local Striker = {}
+Striker.__index = Striker
+
+Striker.REACH = 1.00 -- şut için topun ayağa uzaklığı (m)
+Striker.WALK_SPEED = 5.2 -- yaklaşma hızı (m/s)
+Striker.COOLDOWN = 1.4 -- şutlar arası bekleme (s)
+Striker.MAX_WAIT = 1.2 -- hareketli topa bekleme süresi (s)
+
+local clamp01 = Ease.clamp01
+
+-- Şut hedefleri: döngüyle değişir (alt köşe -> üst köşe -> orta)
+local TARGETS = {
+	{ z = 2.55, y = 0.32 },
+	{ z = -2.40, y = 1.90 },
+	{ z = 1.05, y = 0.85 },
+}
+
+function Striker.new(cfg, opts)
+	opts = opts or {}
+	local P = cfg.PITCH
+	local side = opts.side or 1
+	local pos = opts.pos or Vec3.new(P.halfLength * 0.30, 0, 0.8)
+	return setmetatable({
+		cfg = cfg,
+		side = side,
+		pos = pos,
+		vel = Vec3.new(0, 0, 0),
+		facing = Vec3.yaw(Vec3.new(side, 0, 0)),
+		state = "idle", -- idle | approach | wait | kick
+		kick = nil,
+		kickT = 0,
+		cooldown = 0,
+		waitTimer = 0,
+		walkPhase = 0,
+		time = 0,
+		shots = 0,
+		aimIndex = 0,
+		target = nil,
+		speed = 0,
+	}, Striker)
+end
+
+function Striker:goalPoint()
+	local P = self.cfg.PITCH
+	return Vec3.new(self.side * P.halfLength, 0, 0)
+end
+
+-- Şut için gereken geometri: topun ayağa göre yan/ön/ileri bileşenleri
+function Striker:ballGeometry(ball)
+	local toBall = Vec3.sub(ball.pos, self.pos)
+	local forward = Vec3.new(math.cos(self.facing), 0, math.sin(self.facing))
+	local right = Vec3.cross(forward, Vec3.new(0, 1, 0))
+	local flat = Vec3.withY(toBall, 0)
+	return {
+		dist = Vec3.length(flat),
+		lateral = Vec3.dot(flat, right),
+		forward = Vec3.dot(flat, forward),
+		height = ball.pos.y,
+	}
+end
+
+function Striker:beginKick(ball)
+	local geo = self:ballGeometry(ball)
+	local goal = self:goalPoint()
+	local dx = goal.x - ball.pos.x
+	local dz = goal.z - ball.pos.z
+	local distGoal = math.sqrt(dx * dx + dz * dz)
+
+	self.aimIndex = (self.aimIndex % #TARGETS) + 1
+	local aim = TARGETS[self.aimIndex]
+
+	-- Uzaktan sert, yakından kontrollü
+	local charge = clamp01(0.42 + distGoal / 42)
+	local speed = 15 + 11 * charge
+
+	self.kick = KickAnim.new({
+		ballHeight = geo.height,
+		ballLateral = geo.lateral,
+		ballForward = geo.forward,
+		charge = charge,
+	})
+	self.kickT = 0
+	self.speed = speed
+	self.target = Vec3.new(goal.x, aim.y, aim.z)
+	self.state = "kick"
+	self.shots = self.shots + 1
+	return self.kick
+end
+
+--[[ Bir adım. Dönüş: nil veya {
+		type = "shoot", kick = KickAnim, target = Vec3 (metre), speed = m/s } ]]
+function Striker:step(dt, ball)
+	self.time = self.time + dt
+	if self.cooldown > 0 then
+		self.cooldown = math.max(0, self.cooldown - dt)
+	end
+
+	-- 1) Şut animasyonu sürüyor: sadece zaman ilerler
+	if self.kick then
+		local before = self.kickT
+		self.kickT = self.kickT + dt
+		-- Hazırlık boyunca ayak yere basar; itiş hızı sabit kalır (gerçekçi)
+		local event = nil
+		if before < KickAnim.CONTACT_TIME and self.kickT >= KickAnim.CONTACT_TIME then
+			event = {
+				type = "shoot",
+				kick = self.kick,
+				target = self.target,
+				speed = self.speed,
+				charge = self.kick.charge,
+			}
+		end
+		if self.kickT >= self.kick:duration() then
+			self.kick = nil
+			self.kickT = 0
+			self.cooldown = Striker.COOLDOWN
+			self.state = "idle"
+		end
+		self.vel = Vec3.new(0, 0, 0)
+		return event
+	end
+
+	-- 2) Topa yaklaş
+	local geo = self:ballGeometry(ball)
+	local ballSpeed = ball:speed()
+
+	if geo.dist > Striker.REACH then
+		local dir = Vec3.unit(Vec3.withY(Vec3.sub(ball.pos, self.pos), 0))
+		local want = Striker.WALK_SPEED
+		-- Yavaşlayarak yaklaş: hedefe 0.4 m kalınca yavaşla
+		if geo.dist < 2.2 then
+			want = Striker.WALK_SPEED * clamp01((geo.dist - Striker.REACH) / 1.2) + 0.6
+		end
+		self.vel = Vec3.scale(dir, want)
+		self.pos = Vec3.add(self.pos, Vec3.scale(self.vel, dt))
+		self.facing = Vec3.yaw(dir)
+		self.walkPhase = (self.walkPhase + Vec3.length(self.vel) * dt / WalkCycle.STRIDE) % 1
+		self.state = "approach"
+		return nil
+	end
+
+	self.vel = Vec3.new(0, 0, 0)
+
+	-- 3) Top hızlıysa bekle (ayağına gelsin)
+	if ballSpeed > 1.2 then
+		self.waitTimer = self.waitTimer + dt
+		self.state = "wait"
+		if self.waitTimer < Striker.MAX_WAIT then
+			return nil
+		end
+	else
+		self.waitTimer = 0
+	end
+
+	-- 4) Top kaleye dönük mü? Değilse önce etrafından dolaş (kale arkasına geçme)
+	if self.cooldown > 0 then
+		self.state = "idle"
+		return nil
+	end
+
+	self.facing = Vec3.yaw(Vec3.withY(Vec3.sub(self:goalPoint(), self.pos), 0))
+	self:beginKick(ball)
+	return nil
+end
+
+-- Görsel poz: şut sürüyorsa şut, değilse adım döngüsü
+function Striker:pose()
+	if self.kick then
+		return self.kick:sample(self.kickT).pose
+	end
+	local speed = Vec3.length(self.vel)
+	return WalkCycle.sample(speed, self.walkPhase, self.time)
+end
+
+function Striker:isKicking()
+	return self.kick ~= nil
+end
+
+return Striker
+]=] },
 	["shared/Sim"] = { class = "ModuleScript", source = [=[
 --[[
 	Sim — sabit adımlı simülasyon çekirdeği (fixed timestep).
@@ -2644,6 +4145,9 @@ return Sim
 ]]
 
 local Config = require(script.Parent.Parent.Config)
+local Vec3 = require(script.Parent.Parent.Core.Vec3)
+local PartRig = require(script.Parent.Parent.Anim.PartRig)
+local Rig = require(script.Parent.Parent.Anim.Rig)
 
 local SceneBuilder = {}
 
@@ -2917,53 +4421,44 @@ local function buildBall()
 	return ball
 end
 
---[[ Kaleci görseli: basit blok gövde + kafa + iki kol.
-	Sunucu her karede bu modeli kaleci AI'sinin konumuna taşır. ]]
+--[[ Kaleci görseli: TAMAMEN prosedürel iskelet (13 parça + 2 eldiven).
+	Hiçbir model/animasyon asset'i yok; parçalar sunucuda FK ile pozlanır.
+	Kaleci sahaya dönük durur: ileri = -side * x̂. ]]
+local function keeperYaw(side)
+	-- forward = (-side, 0, 0) -> yaw = atan2(fz, fx)
+	return atan2(0, -side)
+end
+
 local function buildKeeper(root, side)
 	local K = Config.KEEPER
 	local folder = Instance.new("Folder")
 	folder.Name = "Goalkeeper"
 	folder.Parent = root
 
-	local kit = Color3.fromRGB(250, 214, 60)
-	local skin = Color3.fromRGB(232, 190, 160)
+	local model = PartRig.build(folder, { name = "Rig", studsPerMeter = S })
 	local x = side * (P.halfLength - K.lineOffset)
+	model.x = x
+	model.side = side
+	model.yaw = keeperYaw(side)
+	PartRig.apply(model, nil, Vec3.new(x * S, 0, 0), model.yaw, S)
+	return model
+end
 
-	local body = makePart(
-		folder,
-		"Body",
-		Vector3.new(0.55 * S, 1.15 * S, 0.32 * S),
-		CFrame.new(v3(x, 0.85, 0)),
-		kit,
-		Enum.Material.SmoothPlastic
-	)
-	local head = makePart(
-		folder,
-		"Head",
-		Vector3.new(0.30 * S, 0.30 * S, 0.30 * S),
-		CFrame.new(v3(x, 1.60, 0)),
-		skin,
-		Enum.Material.SmoothPlastic,
-		{ shape = Enum.PartType.Ball }
-	)
-	local armL = makePart(
-		folder,
-		"ArmL",
-		Vector3.new(0.12 * S, 0.70 * S, 0.12 * S),
-		CFrame.new(v3(x, 1.10, -0.36)),
-		kit,
-		Enum.Material.SmoothPlastic
-	)
-	local armR = makePart(
-		folder,
-		"ArmR",
-		Vector3.new(0.12 * S, 0.70 * S, 0.12 * S),
-		CFrame.new(v3(x, 1.10, 0.36)),
-		kit,
-		Enum.Material.SmoothPlastic
-	)
+--[[ Şutçu NPC'si: kaleci ile aynı prosedürel iskelet, farklı forma rengi. ]]
+local function buildStriker(root, side, startPos)
+	local folder = Instance.new("Folder")
+	folder.Name = "Striker"
+	folder.Parent = root
 
-	return { folder = folder, body = body, head = head, armL = armL, armR = armR, x = x }
+	local model = PartRig.build(folder, {
+		name = "Rig",
+		studsPerMeter = S,
+		kitColor = Color3.fromRGB(228, 68, 82),
+	})
+	model.side = side
+	model.pos = startPos
+	PartRig.apply(model, nil, Vec3.new(startPos.x * S, 0, startPos.z * S), 0, S)
+	return model
 end
 
 local function setupLighting()
@@ -3041,20 +4536,25 @@ function SceneBuilder.build(opts)
 
 	local ball = buildBall()
 	local keeper = buildKeeper(root, goalSide)
-	setupLighting()
-
-	-- Doğma noktası: yarım sahada arka çizginin gerisinde
-	local spawnX = half and 3 or 0
-	buildSpawn(root, spawnX)
 
 	local ballStart = half and Vector3.new((P.halfLength * 0.40) * S, Config.BALL.radius * S, 0)
 		or Vector3.new(0, Config.BALL.radius * S, 0)
+	local strikerStart = Vec3.new(ballStart.X / S - 1.45, 0, 0.75)
+	local striker = buildStriker(root, goalSide, strikerStart)
+	setupLighting()
+
+	-- Doğma noktası: yarım sahada topun gerisinde (animasyonlar görüş alanında)
+	local spawnX = half and (P.halfLength * 0.18) or 0
+	buildSpawn(root, spawnX)
+
 	ball.CFrame = CFrame.new(ballStart)
 
 	return {
 		root = root,
 		ball = ball,
 		keeper = keeper,
+		striker = striker,
+		strikerStart = strikerStart,
 		backNet = backNet,
 		backX = backX,
 		ballStart = ballStart,
@@ -3071,33 +4571,42 @@ function SceneBuilder.resetBallPosition(positionStuds)
 	end
 end
 
---[[ Kaleci modelini AI durumuna göre taşır (sunucu çağırır). ]]
-function SceneBuilder.updateKeeperModel(keeperModel, keeperState, studsPerMeter)
-	if not keeperModel or not keeperState then
+--[[ Kaleci modelini poza göre konumlandırır (sunucu her karede çağırır).
+	pose: KeeperAnim:sample(t) çıktısı (veya nil = duruş)
+	pos : kaleci AI'sinin konumu (METRE, Vec3) ]]
+function SceneBuilder.updateKeeperModel(keeperModel, pose, pos, studsPerMeter)
+	if not keeperModel then
 		return
 	end
 	local s = studsPerMeter or S
-	local pos = keeperState.pos
-	local x, z = pos.x * s, pos.z * s
-	local diving = keeperState.state == "dive"
-	local lean = 0
-	if diving then
-		lean = keeperState.vel.z / Config.KEEPER.diveSpeed
-		lean = math.max(-1, math.min(1, lean))
-	end
+	local side = keeperModel.side or 1
+	local origin = Vec3.new(pos.x * s, 0, pos.z * s)
+	return PartRig.apply(keeperModel, pose, origin, keeperYaw(side), s)
+end
 
-	if keeperModel.body then
-		keeperModel.body.CFrame = CFrame.new(x, 0.85 * s, z) * CFrame.Angles(0, 0, lean * 0.5)
+--[[ Şutçu modelini poza göre konumlandırır. pos: metre Vec3, yaw: baktığı yön ]]
+function SceneBuilder.updateStrikerModel(strikerModel, pose, pos, yaw, studsPerMeter)
+	if not strikerModel then
+		return
 	end
-	if keeperModel.head then
-		keeperModel.head.CFrame = CFrame.new(x, (1.60 - math.abs(lean) * 0.25) * s, z)
+	local s = studsPerMeter or S
+	local origin = Vec3.new(pos.x * s, 0, pos.z * s)
+	return PartRig.apply(strikerModel, pose, origin, yaw, s)
+end
+
+--[[ Kaleci görselinin dünya uzayındaki el noktaları (hata ayıklama/teşhis). ]]
+function SceneBuilder.keeperHands(keeperModel, pose, pos, studsPerMeter)
+	if not keeperModel then
+		return nil
 	end
-	if keeperModel.armL then
-		keeperModel.armL.CFrame = CFrame.new(x, 1.10 * s, z - 0.36 * s) * CFrame.Angles(lean * 0.9, 0, 0)
+	local s = studsPerMeter or S
+	local solved = SceneBuilder.updateKeeperModel(keeperModel, pose, pos, s)
+	local out = {}
+	for _, side in ipairs({ "L", "R" }) do
+		local hand, forward, right, up = Rig.toWorld(solved.pos["hand" .. side], Vec3.new(pos.x * s, 0, pos.z * s), keeperYaw(keeperModel.side or 1), s)
+		out[side] = hand
 	end
-	if keeperModel.armR then
-		keeperModel.armR.CFrame = CFrame.new(x, 1.10 * s, z + 0.36 * s) * CFrame.Angles(-lean * 0.9, 0, 0)
-	end
+	return out
 end
 
 return SceneBuilder

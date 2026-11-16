@@ -34,6 +34,9 @@ function Keeper.new(cfg, side)
 		state = "idle", -- idle | track | dive
 		reactionTimer = 0,
 		diveTimer = 0,
+		diveElapsed = 0,
+		diveTarget = nil,
+		arrival = nil,
 		hits = 0,
 		saves = 0,
 		conceded = 0,
@@ -51,23 +54,30 @@ function Keeper.new(cfg, side)
 	}, Keeper)
 end
 
--- Topun kale çizgisine varacağı z konumunu simülasyon kopyasıyla tahmin eder.
-function Keeper:predictArrivalZ(ball, maxSeconds)
+-- Topun kale düzlemine varacağı noktayı simülasyon kopyasıyla tahmin eder.
+-- Dönüş: { z = yanal konum, y = yükseklik, t = varış süresi (s) }
+function Keeper:predictArrival(ball, maxSeconds)
 	local copy = ball:clone()
 	-- Tahmin 120 Hz'de yapılır: kaleci için yeterli hassasiyet, yarı maliyet
 	local dt = 1 / 120
 	local steps = math.floor((maxSeconds or 2.5) / dt)
 	local P = self.cfg.PITCH
-	for _ = 1, steps do
+	local planeX = P.halfLength - self.cfg.KEEPER.lineOffset
+	for i = 1, steps do
 		copy:step(dt)
-		if copy.pos.x * self.side >= P.halfLength - self.cfg.KEEPER.lineOffset then
-			return copy.pos.z
+		if copy.pos.x * self.side >= planeX then
+			return { z = copy.pos.z, y = copy.pos.y, t = i * dt }
 		end
-		if abs(copy.pos.x) > P.halfLength + P.goalDepth then
-			return copy.pos.z
+		if abs(copy.pos.x) > P.halfLength + P.goalDepth or copy.pos.y < -0.5 then
+			break
 		end
 	end
-	return copy.pos.z
+	return { z = copy.pos.z, y = copy.pos.y, t = steps * dt }
+end
+
+-- Geriye dönük: sadece yanal varış noktası
+function Keeper:predictArrivalZ(ball, maxSeconds)
+	return self:predictArrival(ball, maxSeconds).z
 end
 
 --[[ Bir adım. Dönüş: çarpışma için gövde tanımı. ]]
@@ -85,9 +95,10 @@ function Keeper:step(ball, dt)
 	if towardGoal and distanceToLine > 0 and distanceToLine < 18 then
 		self.reactionTimer = self.reactionTimer + dt
 		if self.reactionTimer >= K.reactionTime then
-			local predicted = self:predictArrivalZ(ball, 2.5)
+			local arrival = self:predictArrival(ball, 2.5)
 			-- Kaleci hatası: tepki mesafesiyle artan küçük sapma (deterministik)
-			targetZ = max(-K.reachZ, min(K.reachZ, predicted))
+			targetZ = max(-K.reachZ, min(K.reachZ, arrival.z))
+			self.arrival = arrival
 			wantDive = true
 		else
 			targetZ = max(-K.reachZ, min(K.reachZ, ball.pos.z))
@@ -123,11 +134,24 @@ function Keeper:step(ball, dt)
 	end
 
 	if wantDive then
+		if self.state ~= "dive" then
+			-- Dalış başlıyor: animasyon için hedefi kilitle
+			self.diveTarget = {
+				dz = targetZ - self.pos.z,
+				height = (self.arrival and self.arrival.y) or 0.5,
+				speed = ball:speed(),
+				time = (self.arrival and self.arrival.t) or 1,
+			}
+			self.diveElapsed = 0
+		end
 		self.state = "dive"
 		self.diveTimer = self.diveTimer + dt
+		self.diveElapsed = (self.diveElapsed or 0) + dt
 	else
 		self.state = abs(self.vel.z) > 0.5 and "track" or "idle"
 		self.diveTimer = 0
+		self.diveElapsed = 0
+		self.diveTarget = nil
 	end
 
 	-- Dalış sırasında gövde alçalır (daha geniş ama daha kısa)
@@ -139,7 +163,8 @@ function Keeper:step(ball, dt)
 	local body = self.body
 	body.pos = Vec3.new(self.pos.x, 0, self.pos.z)
 	body.vel = Vec3.new(0, 0, self.vel.z)
-	body.radius = K.radius
+	-- Dalışta kollar açılır: gövde yarıçapı bir miktar büyür (görsel uzanmayla uyumlu)
+	body.radius = K.radius + (wantDive and K.diveReachBonus or 0)
 	body.height = height
 
 	return body

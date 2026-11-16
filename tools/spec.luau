@@ -19,6 +19,13 @@ local Net = __load("shared/Physics/Net")
 local Body = __load("shared/Physics/Body")
 local BallControl = __load("shared/Player/BallControl")
 local Keeper = __load("shared/Player/Keeper")
+local Rig = __load("shared/Anim/Rig")
+local Pose = __load("shared/Anim/Pose")
+local Ease = __load("shared/Anim/Ease")
+local KickAnim = __load("shared/Anim/KickAnim")
+local KeeperAnim = __load("shared/Anim/KeeperAnim")
+local WalkCycle = __load("shared/Anim/WalkCycle")
+local Striker = __load("shared/Player/Striker")
 
 local passed, failed = 0, 0
 local failures = {}
@@ -892,8 +899,17 @@ test("sahne kuruldu: yarim saha, 1 kale, direkler, ag, kaleci, top", function()
 
 	local keeper = pitch:FindFirstChild("Goalkeeper")
 	check(keeper ~= nil, "kaleci modeli yok")
-	check(keeper:FindFirstChild("Body") ~= nil and keeper:FindFirstChild("Head") ~= nil, "kaleci parcalari eksik")
-	check(keeper:FindFirstChild("ArmL") ~= nil and keeper:FindFirstChild("ArmR") ~= nil, "kaleci kollari yok")
+	local keeperRig = keeper:FindFirstChild("Rig")
+	check(keeperRig ~= nil, "kaleci iskeleti (Rig) yok")
+	check(keeperRig:FindFirstChild("Head") ~= nil and keeperRig:FindFirstChild("Torso") ~= nil, "kaleci parcalari eksik")
+	check(keeperRig:FindFirstChild("UpperArmL") ~= nil and keeperRig:FindFirstChild("ForearmR") ~= nil, "kaleci kollari yok")
+	check(keeperRig:FindFirstChild("ThighL") ~= nil and keeperRig:FindFirstChild("ShinR") ~= nil, "kaleci bacaklari yok")
+	check(keeperRig:FindFirstChild("GloveL") ~= nil and keeperRig:FindFirstChild("GloveR") ~= nil, "kaleci eldivenleri yok")
+	check(#keeperRig:GetChildren() == 15, "iskelet 15 parca olmali (13 kemik + 2 eldiven), gelen " .. tostring(#keeperRig:GetChildren()))
+
+	local striker = pitch:FindFirstChild("Striker")
+	check(striker ~= nil, "sutcu modeli yok")
+	check(striker:FindFirstChild("Rig") ~= nil, "sutcu iskeleti yok")
 
 	local ball = ws:FindFirstChild("MatchBall")
 	check(ball ~= nil, "top yok")
@@ -921,6 +937,370 @@ test("kurulum tekrar calistirilinca cogaltmiyor (idempotent)", function()
 	check(#pitchAfter:GetChildren() > 0, "sahne silindi")
 	check(#pitchAfter:FindFirstChild("Goals"):GetChildren() == before, "kale klasorleri cogaldi")
 	check(#pitchAfter:FindFirstChild("Lines"):GetChildren() == lineCountBefore, "cizgiler cogaldi")
+end)
+
+print("\n== 9. Prosedurel animasyon (kod ile, asset yok) ==")
+
+-- Yardımcı: poz uygulanmis iskelet
+local function solve(pose)
+	return Rig.solve(pose or Pose.new())
+end
+
+test("iskelet: durus pozunda ayaklar yerde, bas 1.56 m", function()
+	local r = solve()
+	near(r.pos.ankleL.y, 0.06, 0.01, "sol ayak bilegi")
+	near(r.pos.ankleR.y, 0.06, 0.01, "sag ayak bilegi")
+	near(r.pos.toeL.y, 0.0, 0.02, "sol ayak ucu yerde")
+	near(r.pos.head.y, 1.56, 0.02, "bas yuksekligi")
+	near(r.pos.handL.y, 0.84, 0.03, "el yuksekligi (kol asagi)")
+end)
+
+test("iskelet: kemik uzunluklari pozdan bagimsiz sabit", function()
+	local function lengths(pose)
+		local r = solve(pose)
+		return {
+			thigh = Vec3.distance(r.pos.hipR, r.pos.kneeR),
+			shin = Vec3.distance(r.pos.kneeR, r.pos.ankleR),
+			arm = Vec3.distance(r.pos.shoulderR, r.pos.handR),
+		}
+	end
+	local base = lengths(Pose.new())
+	local bent = lengths({ hipR = Pose.joint(-1.1, 0.3, 0), kneeR = Pose.joint(1.4, 0, 0), spine = Pose.joint(0.4, 0.2, 0) })
+	near(bent.thigh, base.thigh, 1e-9, "ust bacak")
+	near(bent.shin, base.shin, 1e-9, "alt bacak")
+	near(bent.arm, base.arm, 1e-9, "kol")
+	between(base.thigh, 0.44, 0.46, "ust bacak uzunlugu")
+end)
+
+test("iskelet: kalca one donunce ayak one gider", function()
+	local forward = solve({ hipR = Pose.joint(-0.9, 0, 0) })
+	local back = solve({ hipR = Pose.joint(0.9, 0, 0) })
+	check(forward.pos.toeR.z > 0.35, "one savurmada ayak one gitmedi: " .. tostring(forward.pos.toeR.z))
+	check(back.pos.toeR.z < -0.35, "geri savurmada ayak geriye gitmedi: " .. tostring(back.pos.toeR.z))
+end)
+
+test("sut animasyonu: temas zamani ve ayak one gelir", function()
+	local kick = KickAnim.new({ ballHeight = 0.11, ballLateral = 0.1, charge = 0.8 })
+	check(kick:sample(0.20).contact == false, "temastan once contact=true olmamali")
+	check(kick:sample(0.25).contact == true, "temas sonrasi contact=true olmali")
+
+	local atContact = solve(kick:sample(0.24).pose)
+	local kickingFoot = atContact.pos["toe" .. kick.foot]
+	local supportFoot = atContact.pos["toe" .. kick.otherFoot]
+	check(kickingFoot.z > supportFoot.z + 0.25, "vuran ayak destek ayagindan onde degil")
+	check(kickingFoot.z > 0.30, "vuran ayak topa dogru one gitmedi: " .. tostring(kickingFoot.z))
+end)
+
+test("sut animasyonu: top yukseldikce ayak yukselir (vole)", function()
+	local low = KickAnim.new({ ballHeight = 0.11, ballLateral = 0 })
+	local high = KickAnim.new({ ballHeight = 1.9, ballLateral = 0 })
+	local lowFoot = solve(low:sample(0.24).pose).pos["toe" .. low.foot]
+	local highFoot = solve(high:sample(0.24).pose).pos["toe" .. high.foot]
+	check(highFoot.y > lowFoot.y + 0.25,
+		"yuksek topa ayak daha yukari cikmali: alcak=" .. tostring(lowFoot.y) .. " yuksek=" .. tostring(highFoot.y))
+	-- Yuksek topta govde geriye yatar
+	check(high:sample(0.24).pose.spine.x > low:sample(0.24).pose.spine.x, "vole'de govde geriye yatmali")
+end)
+
+test("sut animasyonu: guc arttikca takip yuksekligi artar", function()
+	local soft = KickAnim.new({ ballHeight = 0.11, charge = 0.15 })
+	local hard = KickAnim.new({ ballHeight = 0.11, charge = 1.0 })
+	local softFoot = solve(soft:sample(0.40).pose).pos["toe" .. soft.foot]
+	local hardFoot = solve(hard:sample(0.40).pose).pos["toe" .. hard.foot]
+	check(hardFoot.y > softFoot.y + 0.05,
+		"guc arttikca bacak daha yukari savrulmali: yumusak=" .. tostring(softFoot.y) .. " sert=" .. tostring(hardFoot.y))
+end)
+
+test("sut animasyonu: topun yanina gore ayak secilir", function()
+	check(KickAnim.new({ ballLateral = 0.4 }).foot == "R", "sag taraftaki top sag ayakla vurulmali")
+	check(KickAnim.new({ ballLateral = -0.4 }).foot == "L", "sol taraftaki top sol ayakla vurulmali")
+end)
+
+test("sut animasyonu: hareket sonunda dinlenme pozuna doner", function()
+	local kick = KickAnim.new({ ballHeight = 0.11, charge = 0.9 })
+	local endPose = kick:sample(kick:duration())
+	local r = solve(endPose)
+	near(r.pos.toeR.y, 0.0, 0.03, "sut sonrasi ayak yerde")
+	near(r.pos.toeL.y, 0.0, 0.03, "sut sonrasi diger ayak yerde")
+end)
+
+test("kaleci: topun yuksekligine gore hareket tipi secer", function()
+	check(KeeperAnim.new({ dz = 0.1, height = 0.5 }).kind == "block", "orta top -> blok")
+	check(KeeperAnim.new({ dz = 1.2, height = 0.4 }).kind == "dive", "yana alcak top -> dalis")
+	check(KeeperAnim.new({ dz = 0.2, height = 1.9 }).kind == "jump", "yuksek orta top -> ziplama")
+	check(KeeperAnim.new({ dz = 1.4, height = 1.8 }).kind == "jumpDive", "yana yuksek top -> ziplamali dalis")
+end)
+
+test("kaleci: dalis yonu topun yonune uyar ve uzanir", function()
+	local right = KeeperAnim.new({ dz = 1.2, height = 0.5 })
+	local left = KeeperAnim.new({ dz = -1.2, height = 0.5 })
+	local rp = right:sample(0.40).pose
+	local lp = left:sample(0.40).pose
+	check(rp.rootOffset.x > 0.5, "saga dalis +x yonunde olmali: " .. tostring(rp.rootOffset.x))
+	check(lp.rootOffset.x < -0.5, "sola dalis -x yonunde olmali: " .. tostring(lp.rootOffset.x))
+	check(rp.rootOffset.y < 0, "alcak dalista govde alcak olmali")
+
+	local r = solve(rp)
+	local l = solve(lp)
+	-- Kollar topa dogru uzanir: sag dalişta sag el sagda
+	check(r.pos.handR.x > r.pos.shoulderR.x + 0.25, "sag dalista kol uzanmadi")
+	check(l.pos.handL.x < l.pos.shoulderL.x - 0.25, "sol dalista kol uzanmadi")
+end)
+
+test("kaleci: yuksek topta ziplar (govde yukselir)", function()
+	local jump = KeeperAnim.new({ dz = 0.2, height = 1.9 })
+	local pose = jump:sample(0.40).pose
+	check(pose.rootOffset.y > 0.3, "ziplamada govde yukselmedi: " .. tostring(pose.rootOffset.y))
+	local r = solve(pose)
+	check(r.pos.handR.y > 1.9, "ziplamada eller yukari uzanmali: " .. tostring(r.pos.handR.y))
+end)
+
+test("kaleci: hareket sonunda toparlanir (govde eski yerinde)", function()
+	local dive = KeeperAnim.new({ dz = 1.2, height = 0.5 })
+	local pose = dive:sample(0.95).pose
+	check(math.abs(pose.rootOffset.x) < 0.02, "dalistan sonra yanal ofset kalmamali")
+	check(math.abs(pose.rootOffset.y) < 0.02, "dalistan sonra dikey ofset kalmamali")
+end)
+
+test("kaleci: uzanma mesafesi topun uzakligiyla artar", function()
+	local near_ = KeeperAnim.new({ dz = 0.6, height = 0.4 })
+	local far = KeeperAnim.new({ dz = 1.15, height = 0.4 })
+	check(far.reach > near_.reach, "uzak topa daha cok uzanmali")
+end)
+
+test("kosu dongusu: bacaklar ve kollar karsilikli salinir", function()
+	local p = WalkCycle.sample(6.0, 0.25, 0)
+	check(p.hipL.x * p.hipR.x < 0, "bacaklar zit yonde olmali")
+	check(p.shoulderL.x * p.shoulderR.x < 0, "kollar zit yonde olmali")
+	local p2 = WalkCycle.sample(6.0, 0.75, 0)
+	check(p.hipL.x * p2.hipL.x < 0, "yarim dongude bacak yon degistirmeli")
+end)
+
+test("kosu dongusu: hiz artinca adim buyur, durunca sifirlanir", function()
+	local slow = WalkCycle.sample(2.0, 0.25, 0)
+	local fast = WalkCycle.sample(7.0, 0.25, 0)
+	check(math.abs(fast.hipL.x) > math.abs(slow.hipL.x), "hizli kosuda adim buyumeli")
+	local idle = WalkCycle.sample(0.0, 0.25, 1.0)
+	check(idle.hipL == nil or math.abs(idle.hipL.x) < 1e-9, "dururken bacak salinimi olmamali")
+end)
+
+test("poz karisimi: blend uclarda dogru sonuc verir", function()
+	local a = { hipR = Pose.joint(1, 0, 0) }
+	local b = { hipR = Pose.joint(-1, 0.4, 0) }
+	near(Pose.blend(a, b, 0).hipR.x, 1, 1e-9, "blend 0")
+	near(Pose.blend(a, b, 1).hipR.x, -1, 1e-9, "blend 1")
+	near(Pose.blend(a, b, 0.5).hipR.x, 0, 1e-9, "blend 0.5")
+end)
+
+test("animasyon deterministik: ayni girdi ayni pozu verir", function()
+	local function sampleAll()
+		local k = KickAnim.new({ ballHeight = 0.8, ballLateral = -0.3, charge = 0.6 })
+		local out = {}
+		for i = 0, 20 do
+			local pose = k:sample(i * 0.031).pose
+			out[#out + 1] = string.format("%.6f", pose.spine.x + pose.hipL.x + pose.kneeR.x)
+		end
+		return table.concat(out, ",")
+	end
+	check(sampleAll() == sampleAll(), "ayni girdi farkli poz uretti")
+end)
+
+test("sutcu: temas aninda sut cikar, oncesinde degil", function()
+	local sim2 = Sim.new({ seed = 7 })
+	sim2.ball:setState(Vec3.new(20, 0.11, 0.9), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	local striker = Striker.new(Config, { side = 1, pos = Vec3.new(19.85, 0, 0.9) })
+
+	striker:step(1 / 60, sim2.ball) -- top ayak mesafesinde -> savurma baslar
+	check(striker:isKicking(), "yakin topta sut baslamadi")
+
+	local contactAt = nil
+	for i = 1, 120 do
+		local ev = striker:step(1 / 60, sim2.ball)
+		if ev and ev.type == "shoot" then
+			contactAt = i / 60
+			break
+		end
+	end
+	check(contactAt ~= nil, "sut olayi hic gelmedi")
+	near(contactAt, KickAnim.CONTACT_TIME, 0.02, "temas zamani")
+	check(contactAt > 0.18, "top savurma tamamlanmadan ayrildi")
+end)
+
+test("sutcu: uzaktaki topa yurur, mesafe kapaniyor", function()
+	local sim2 = Sim.new({ seed = 7 })
+	sim2.ball:setState(Vec3.new(24, 0.11, 2.0), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	local striker = Striker.new(Config, { side = 1, pos = Vec3.new(18, 0, 0) })
+
+	local function dist()
+		local dx = sim2.ball.pos.x - striker.pos.x
+		local dz = sim2.ball.pos.z - striker.pos.z
+		return math.sqrt(dx * dx + dz * dz)
+	end
+
+	local startDist = dist()
+	local shotEarly = false
+	for _ = 1, 60 do
+		local ev = striker:step(1 / 60, sim2.ball)
+		if ev then
+			shotEarly = true
+		end
+	end
+	check(not shotEarly, "sutcu ayak mesafesine gelmeden sut cekti")
+	check(dist() < startDist - 3, "sutcu topa yaklasmadi: " .. string.format("%.2f -> %.2f", startDist, dist()))
+end)
+
+test("sutcu: ardisik sutlarda hedef degisir (kalecinin isi zorlasir)", function()
+	local sim2 = Sim.new({ seed = 7 })
+	local striker = Striker.new(Config, { side = 1, pos = Vec3.new(20, 0, 0) })
+
+	local targets = {}
+	for round = 1, 3 do
+		sim2.ball:setState(Vec3.new(20, 0.11, 0.3), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+		striker.pos = Vec3.new(19.8, 0, 0.3)
+		striker.kick = nil
+		striker.kickT = 0
+		striker.cooldown = 0
+		striker:step(1 / 60, sim2.ball)
+		check(striker:isKicking(), "sut baslamadi (tur " .. round .. ")")
+		targets[round] = { y = striker.target.y, z = striker.target.z }
+		-- animasyonu bitir
+		for _ = 1, 60 do
+			striker:step(1 / 60, sim2.ball)
+		end
+	end
+	local dz = math.abs(targets[1].z - targets[2].z)
+	check(dz > 2.0, "ardisik sutlar ayni koseye gitti: " .. string.format("%.2f", dz))
+	check(math.abs(targets[1].y - targets[2].y) > 0.6, "ardisik sutlar ayni yukseklige gitti")
+end)
+
+print("\n== 10. Sunucu dongusu + animasyon (sahte Roblox ortaminda) ==")
+
+-- SimLoop'u mock icinde calistir, Heartbeat'i elle sur, animasyonu olc
+local liveMock = nil
+local live = nil
+
+test("sunucu dongusu kurulup 24 s boyunca hatasiz calisiyor", function()
+	liveMock = RobloxMock.install()
+	local installOk, installErr = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+	check(installOk, "kurulum calismadi: " .. tostring(installErr))
+
+	local server = liveMock.serverScriptService:FindFirstChild("Server")
+	check(server ~= nil, "Server klasoru yok")
+	local simLoop = server:FindFirstChild("SimLoop")
+	check(simLoop ~= nil and type(simLoop.Source) == "string", "SimLoop scripti yok")
+
+	local ok, err = pcall(function()
+		local chunk = assert(load(simLoop.Source, "@SimLoop"))
+		chunk()
+	end)
+	check(ok, "SimLoop calismadi: " .. tostring(err))
+
+	local ws = liveMock.workspace
+	local ball = ws:FindFirstChild("MatchBall")
+	local pitch = ws:FindFirstChild("FootballPitch")
+	local keeperFolder = pitch and pitch:FindFirstChild("Goalkeeper")
+	local strikerFolder = pitch and pitch:FindFirstChild("Striker")
+	check(ball ~= nil and keeperFolder ~= nil and strikerFolder ~= nil, "mac nesneleri yok")
+	local rig = keeperFolder:FindFirstChild("Rig")
+	local strikerRig = strikerFolder:FindFirstChild("Rig")
+	check(rig ~= nil and strikerRig ~= nil, "iskeletler yok")
+
+	local gloveL = rig:FindFirstChild("GloveL")
+	local torso = rig:FindFirstChild("Torso")
+	local thigh = strikerRig:FindFirstChild("ThighL")
+	check(gloveL and torso and thigh, "iskelet parcalari eksik")
+
+	live = {
+		ball = ball,
+		rig = rig,
+		strikerRig = strikerRig,
+		maxBallSpeed = 0,
+		maxGloveZ = 0,
+		maxGloveY = -1e9,
+		minTorsoY = 1e9,
+		diveEvents = 0,
+		wasDiving = false,
+		strikerMoved = 0,
+		frames = 0,
+		thighStart = { x = thigh.CFrame.pos.X, y = thigh.CFrame.pos.Y, z = thigh.CFrame.pos.Z },
+	}
+
+	local dt = 1 / 60
+	local prevX, prevZ = ball.CFrame.pos.X, ball.CFrame.pos.Z
+	local glove = gloveL.CFrame.pos
+	local totalFrames = math.floor(24 / dt)
+
+	local stepOk, stepErr = pcall(function()
+		for _ = 1, totalFrames do
+			liveMock.stepHeartbeat(dt * 1.5, dt) -- tam 1 kare
+			live.frames = live.frames + 1
+
+			local bpos = ball.CFrame.pos
+			local dx = bpos.X - prevX
+			local dz = bpos.Z - prevZ
+			local speed = math.sqrt(dx * dx + dz * dz) / dt / 3.5714
+			if speed > live.maxBallSpeed then
+				live.maxBallSpeed = speed
+			end
+			prevX, prevZ = bpos.X, bpos.Z
+
+			-- Olcumler METRE cinsinden (mock CFrame stud tutar)
+			local k = 1 / 3.5714
+			local gp = gloveL.CFrame.pos
+			local absZ = math.abs(gp.Z) * k -- kale cizgisi z = 0
+			local gy = gp.Y * k
+			if absZ > live.maxGloveZ then
+				live.maxGloveZ = absZ
+			end
+			if gy > live.maxGloveY then
+				live.maxGloveY = gy
+			end
+			if absZ > 1.0 and not live.wasDiving then
+				live.diveEvents = live.diveEvents + 1
+				live.wasDiving = true
+			elseif absZ < 0.5 then
+				live.wasDiving = false
+			end
+			local tp = torso.CFrame.pos
+			if tp.Y * k < live.minTorsoY then
+				live.minTorsoY = tp.Y * k
+			end
+			local th = thigh.CFrame.pos
+			local d = (math.abs(th.X - live.thighStart.x) + math.abs(th.Y - live.thighStart.y) + math.abs(th.Z - live.thighStart.z)) * k
+			if d > live.strikerMoved then
+				live.strikerMoved = d
+			end
+		end
+	end)
+	check(stepOk, "Heartbeat dongusu hata verdi: " .. tostring(stepErr))
+	check(live.frames == totalFrames, "dongu tamamlanmadi")
+end)
+
+test("sutcu maci kendi kendine oynuyor: top 18 m/s uzeri hizla sutlaniyor", function()
+	check(live ~= nil, "mac calismadi")
+	check(live.maxBallSpeed > 18,
+		"sut hizi dusuk: " .. string.format("%.1f m/s", live.maxBallSpeed))
+end)
+
+test("sutcu iskeleti gercekten hareket ediyor (yurume + sut)", function()
+	check(live.strikerMoved > 0.10,
+		"sutcu iskeleti hic oynamadi: " .. string.format("%.3f", live.strikerMoved))
+end)
+
+test("kaleci animasyonu: yana dalis ve yuksek top icin farkli hareketler", function()
+	check(live.maxGloveZ > 1.0,
+		"kaleci yana uzandi mi? max |z| = " .. string.format("%.2f stud", live.maxGloveZ))
+	check(live.maxGloveY > 1.85,
+		"kaleci yuksek topa ziplamadi mi? max el y = " .. string.format("%.2f m", live.maxGloveY))
+	check(live.diveEvents >= 1, "dalis olayi sayisi: " .. tostring(live.diveEvents))
+end)
+
+test("kaleci modeli dalista alcaliyor (govde yuksekligi degisiyor)", function()
+	check(live.minTorsoY < 1.05,
+		"govde hic alcalmadi: min y = " .. string.format("%.2f m", live.minTorsoY))
 end)
 
 print("")
