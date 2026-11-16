@@ -12,6 +12,7 @@ local Ballistics = __load("shared/Core/Ballistics")
 local Ball = __load("shared/Physics/Ball")
 local Pitch = __load("shared/Physics/Pitch")
 local Sim = __load("shared/Sim")
+local Net = __load("shared/Physics/Net")
 
 local R = Config.BALL.radius
 local SAMPLE_EVERY = 4 -- 240 Hz -> 60 Hz kayıt
@@ -36,6 +37,11 @@ end
 	opts: { from, to?, elevation?, speed, spin, highArc?, maxSeconds? }]]
 local function simulate(opts)
 	local sim = Sim.new({ seed = 1 })
+	local goalNet = nil
+	if opts.net then
+		goalNet = Net.new(Config, 1)
+		sim.nets[1] = goalNet
+	end
 	local from = opts.from
 	local velocity = opts.velocity
 	if not velocity then
@@ -51,6 +57,7 @@ local function simulate(opts)
 	local maxHeight = from.y
 	local goal = nil
 	local goalSpeed = nil
+	local maxSag = 0
 	local ticks = 240 * (opts.maxSeconds or 4)
 
 	for i = 1, ticks do
@@ -64,12 +71,24 @@ local function simulate(opts)
 		if i % SAMPLE_EVERY == 0 then
 			samples[#samples + 1] = Vec3.new(p.x, p.y, p.z)
 		end
+		if goalNet and goalNet.sag > maxSag then
+			maxSag = goalNet.sag
+		end
+
 		if sim.lastGoal then
 			goal = sim.lastGoal.side
 			goalSpeed = speedBefore
+			sim.lastGoal = nil
+			if not opts.net then
+				break
+			end
+		end
+		local inNet = goalNet and goalNet:isInsideGoalBox(p)
+		if Pitch.isOutOfPlay(p, R) and not inNet then
 			break
 		end
-		if Pitch.isOutOfPlay(p, R) then
+		-- Ağda durduysa izlemeyi bitir
+		if goalNet and sim.ball:speed() < 0.25 and i > 30 then
 			break
 		end
 		if sim.ball.vel.x * sim.ball.vel.x + sim.ball.vel.y * sim.ball.vel.y + sim.ball.vel.z * sim.ball.vel.z < 1e-6 then
@@ -99,9 +118,10 @@ local function simulate(opts)
 		goal = goal,
 		curve = curve,
 		postHits = sim.ball.postHits,
+		maxSag = maxSag,
 		final = sim.ball.pos,
 		speedStart = Vec3.length(velocity),
-		speedEnd = goalSpeed or Vec3.length(sim.ball.vel),
+		speedEnd = (opts.net and Vec3.length(sim.ball.vel)) or goalSpeed or Vec3.length(sim.ball.vel),
 		time = sim.time,
 	}
 end
@@ -159,7 +179,21 @@ shots[#shots + 1] = {
 	}),
 }
 
--- 5) Sekme: 2 m'den düşen topun dikey izi
+-- 5) File: kaleye giren şutun ağda sönümlenmesi
+shots[#shots + 1] = {
+	id = "file",
+	label = "File (ağ)",
+	desc = "24 m/s ile kaleye: ağ enerjiyi yutar, esner ve top içeride durur — geri sekmez.",
+	data = simulate({
+		from = Vec3.new(41.5, R, 0),
+		to = Vec3.new(52.5, 1.1, 0),
+		speed = 24,
+		net = true,
+		maxSeconds = 2.5,
+	}),
+}
+
+-- 6) Sekme: 2 m'den düşen topun dikey izi
 local dropshot = { samples = {}, maxHeight = 2, goal = nil, curve = 0 }
 do
 	local b = Ball.new(Config, Vec3.new(0, 2 + R, 0))
@@ -208,6 +242,7 @@ for i, shot in ipairs(shots) do
 	out[#out + 1] = '"goal":' .. (d.goal and ('"' .. d.goal .. '"') or "null") .. ","
 	out[#out + 1] = '"bounces":' .. tostring(d.bounces or 0) .. ","
 	out[#out + 1] = '"postHits":' .. tostring(d.postHits or 0) .. ","
+	out[#out + 1] = '"maxSag":' .. num(d.maxSag or 0) .. ","
 	out[#out + 1] = '"type":"' .. (d.drop and "drop" or "shot") .. '",'
 	out[#out + 1] = '"aim":' .. (shot.data.aim and jsonVec(shot.data.aim) or "null")
 	out[#out + 1] = (i < #shots) and "}," or "}"

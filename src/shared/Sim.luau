@@ -19,6 +19,7 @@ local Rng = require(script.Parent.Core.Rng)
 local Ball = require(script.Parent.Physics.Ball)
 local Pitch = require(script.Parent.Physics.Pitch)
 local Colliders = require(script.Parent.Physics.Colliders)
+local Body = require(script.Parent.Physics.Body)
 
 local Sim = {}
 Sim.__index = Sim
@@ -31,6 +32,8 @@ function Sim.new(opts)
 		rng = Rng.new(opts.seed or 1),
 		ball = Ball.new(cfg, Vec3.new(0, cfg.BALL.radius, 0)),
 		obstacles = Pitch.buildObstacles(cfg),
+		bodies = {}, -- hareketli gövdeler (oyuncu/kaleci) — sunucu her karede günceller
+		nets = {}, -- file/ağ fizikleri
 		ticks = 0, -- islenen sabit adim sayisi (metot adiyla cakismasin)
 		time = 0,
 		accumulator = 0,
@@ -50,12 +53,21 @@ function Sim:tick()
 	-- Direk / üst direk çarpışması (kale tespitinden ÖNCE: direğe çarpan top gol değil)
 	Colliders.resolve(self.ball, self.obstacles, prev)
 
+	-- Hareketli gövdeler (oyuncu bacakları, kaleci) — 240 Hz'de, adım içi hareket
+	-- doğrusu ile çarpıştırılır ki hızlı şut oyuncunun içinden geçmesin.
+	for i = 1, #self.bodies do
+		Body.collide(self.ball, self.bodies[i])
+	end
+
+	-- File: top kaleye girdiğinde ağ onu yutar (hız sönümü + esneme)
+	for i = 1, #self.nets do
+		self.nets[i]:stepBall(self.ball, dt)
+	end
+
 	-- Kale tespiti (top bu adımda kale çizgisini geçtiyse)
 	local side = Pitch.goalCrossed(prev, self.ball.pos, self.cfg.BALL.radius)
 	if side then
 		self.lastGoal = { side = side, tick = self.ticks + 1, pos = self.ball.pos }
-		-- Ağ topu tutar: kale çizgisini geçen top durur (Adım 5'te santra gelecek)
-		self.ball.vel = Vec3.new(0, 0, -self.ball.vel.z * 0.1)
 	end
 
 	self.ticks = self.ticks + 1

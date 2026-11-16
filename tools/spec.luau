@@ -15,6 +15,10 @@ local Pitch = __load("shared/Physics/Pitch")
 local Locomotion = __load("shared/Player/Locomotion")
 local Sim = __load("shared/Sim")
 local Ballistics = __load("shared/Core/Ballistics")
+local Net = __load("shared/Physics/Net")
+local Body = __load("shared/Physics/Body")
+local BallControl = __load("shared/Player/BallControl")
+local Keeper = __load("shared/Player/Keeper")
 
 local passed, failed = 0, 0
 local failures = {}
@@ -444,6 +448,219 @@ test("carpismadan sonra top direge gomulmez", function()
 	check(dist >= r + P.postRadius - 1e-3, "top diregin icine girdi, mesafe=" .. tostring(dist))
 end)
 
+print("\n== 5c. Oyuncu-top iliskisi ==")
+
+test("kosan oyuncu topu onunde tutar (top surme)", function()
+	local r = Config.BALL.radius
+	local ball = Ball.new(Config, Vec3.new(10.8, r, 0))
+	ball:setState(Vec3.new(10.8, r, 0), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	local bc = BallControl.new(Config)
+	local player = { pos = Vec3.new(10, 0, 0), vel = Vec3.new(4, 0, 0), facing = 0, speed = 4 }
+
+	local dt = 1 / 60
+	local t = 0
+	local maxDist, minDist = 0, 99
+	for _ = 1, 120 do
+		player.pos = Vec3.add(player.pos, Vec3.scale(player.vel, dt))
+		bc:update(ball, player, t)
+		ball:step(dt)
+		local d = Vec3.distanceHorizontal(ball.pos, player.pos)
+		if d > maxDist then maxDist = d end
+		if d < minDist then minDist = d end
+		t = t + dt
+	end
+
+	check(ball.pos.x > player.pos.x, "top oyuncunun gerisinde kaldi")
+	between(minDist, 0.2, 1.6, "en yakin mesafe")
+	between(maxDist, 0.5, 2.6, "en uzak mesafe")
+	check(ball:speed() > 2.5, "top oyuncuyla birlikte ilerlemedi: " .. tostring(ball:speed()))
+end)
+
+test("dokunus sayisi gercek ritimde (~3/sn)", function()
+	local r = Config.BALL.radius
+	local ball = Ball.new(Config, Vec3.new(10.8, r, 0))
+	ball:setState(Vec3.new(10.8, r, 0), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	local bc = BallControl.new(Config)
+	local player = { pos = Vec3.new(10, 0, 0), vel = Vec3.new(5, 0, 0), facing = 0, speed = 5 }
+
+	local dt = 1 / 60
+	for i = 1, 180 do
+		player.pos = Vec3.add(player.pos, Vec3.scale(player.vel, dt))
+		bc:update(ball, player, i * dt)
+		ball:step(dt)
+	end
+	between(bc.touches, 4, 11, "3 saniyedeki dokunus sayisi")
+end)
+
+test("sprint cezasi: hizli kosarken top kontrolden kacar", function()
+	local r = Config.BALL.radius
+	local function maxGap(speed)
+		local ball = Ball.new(Config, Vec3.new(10.8, r, 0))
+		ball:setState(Vec3.new(10.8, r, 0), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+		local bc = BallControl.new(Config)
+		local player = { pos = Vec3.new(10, 0, 0), vel = Vec3.new(speed, 0, 0), facing = 0, speed = speed }
+		local dt = 1 / 60
+		local peak = 0
+		for i = 1, 180 do
+			player.pos = Vec3.add(player.pos, Vec3.scale(player.vel, dt))
+			bc:update(ball, player, i * dt)
+			ball:step(dt)
+			local d = Vec3.distanceHorizontal(ball.pos, player.pos)
+			if d > peak then peak = d end
+		end
+		return peak
+	end
+	local slow = maxGap(4)
+	local fast = maxGap(7.6)
+	check(fast > slow + 0.25, "sprintte top daha fazla kacmali: yavas=" .. tostring(slow) .. " hizli=" .. tostring(fast))
+end)
+
+test("ilk dokunus (trap) hizli gelen topu yumusatir", function()
+	local r = Config.BALL.radius
+	local ball = Ball.new(Config, Vec3.new(10.9, r, 0))
+	ball:setState(Vec3.new(10.9, r, 0), Vec3.new(-12, 0, 0), Vec3.new(0, 0, 0))
+	local bc = BallControl.new(Config)
+	local player = { pos = Vec3.new(10, 0, 0), vel = Vec3.new(0, 0, 0), facing = 0, speed = 0 }
+	local event = bc:update(ball, player, 1.0)
+	check(event == "trap", "trap tetiklenmedi: " .. tostring(event))
+	check(ball:speed() < 5, "top yeterince yavaslamadi: " .. tostring(ball:speed()))
+end)
+
+test("govde: top oyuncunun icinden gecmez", function()
+	local r = Config.BALL.radius
+	local ball = Ball.new(Config, Vec3.new(10.0, 0.5, 0))
+	ball:setState(Vec3.new(10.0, 0.5, 0), Vec3.new(-8, 0, 0), Vec3.new(0, 0, 0))
+	local body = { pos = Vec3.new(10, 0, 0), vel = Vec3.new(0, 0, 0), radius = 0.42, height = 1.8, restitution = 0.4 }
+	local hit = Body.collide(ball, body)
+	check(hit, "carpisma algilanmadi")
+	check(ball.vel.x > 0, "top geri donmedi: vx=" .. tostring(ball.vel.x))
+	local dist = Body.reachDistance(ball, body)
+	check(dist >= r + 0.42 - 1e-3, "top govdenin icine girdi: " .. tostring(dist))
+end)
+
+test("govde: kosan oyuncu topa hiz katar", function()
+	local ball = Ball.new(Config, Vec3.new(10.5, 0.11, 0))
+	ball:setState(Vec3.new(10.5, 0.11, 0), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	local body = { pos = Vec3.new(10, 0, 0), vel = Vec3.new(5, 0, 0), radius = 0.42, height = 1.8, restitution = 0.4 }
+	Body.collide(ball, body)
+	check(ball.vel.x > 3.5, "top oyuncunun hizini almadi: " .. tostring(ball.vel.x))
+end)
+
+test("sut mesafesi ve guc-hiz eslemesi", function()
+	local r = Config.BALL.radius
+	local ball = Ball.new(Config, Vec3.new(11.0, r, 0))
+	ball:setState(Vec3.new(11.0, r, 0), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	local bc = BallControl.new(Config)
+	local player = { pos = Vec3.new(10, 0, 0), vel = Vec3.new(0, 0, 0), facing = 0, speed = 0 }
+	check(bc:canKick(ball, player), "1 m mesafede sut atilabilmeli")
+	player.pos = Vec3.new(5, 0, 0)
+	check(not bc:canKick(ball, player), "6 m mesafede sut atilamamali")
+	near(bc:speedForCharge(0), Config.BALL_CONTROL.minKickSpeed, 1e-9, "min guc")
+	near(bc:speedForCharge(1), Config.BALL_CONTROL.maxKickSpeed, 1e-9, "max guc")
+end)
+
+print("\n== 5d. File (ag) iliskisi ==")
+
+test("kaleye giren sut fileye takilir: durur, ag esner", function()
+	local sim = Sim.new({ seed = 1 })
+	local net = Net.new(Config, 1)
+	sim.nets[1] = net
+	local r = Config.BALL.radius
+
+	local velocity = Ballistics.solveLaunch(Vec3.new(41.5, r, 0), Vec3.new(52.5, 1.0, 0), 22, Config.GRAVITY)
+	sim.ball:setState(Vec3.new(41.5, r, 0), velocity, Vec3.new(0, 0, 0))
+
+	local maxSag = 0
+	local maxX = -100
+	for _ = 1, 240 * 3 do
+		sim:tick()
+		maxSag = math.max(maxSag, net.sag)
+		maxX = math.max(maxX, sim.ball.pos.x)
+	end
+
+	check(sim.lastGoal ~= nil, "gol tespit edilmedi")
+	check(net.contacts >= 1, "aga temas olmadi")
+	check(maxSag > 0.02, "ag esnemedi: " .. tostring(maxSag))
+	check(net.sag < maxSag * 0.5, "ag toparlanmadi: " .. tostring(net.sag))
+	check(sim.ball:speed() < 1.5, "top agda durmadi: " .. tostring(sim.ball:speed()))
+
+	local P = Config.PITCH
+	check(maxX <= P.halfLength + P.goalDepth + 0.01, "top agin arkasina gecti: " .. tostring(maxX))
+	check(sim.ball.pos.x > P.halfLength, "top kale cizgisinin gerisinde: " .. tostring(sim.ball.pos.x))
+end)
+
+test("ag enerjiyi yutar (top hizi ~%95 duser)", function()
+	local sim = Sim.new({ seed = 2 })
+	local net = Net.new(Config, 1)
+	sim.nets[1] = net
+	local r = Config.BALL.radius
+	local velocity = Ballistics.solveLaunch(Vec3.new(41.5, r, 0), Vec3.new(52.5, 0.8, 0), 26, Config.GRAVITY)
+	sim.ball:setState(Vec3.new(41.5, r, 0), velocity, Vec3.new(0, 0, 0))
+	local startSpeed = Vec3.length(velocity)
+	sim:advance(2.5)
+	check(sim.ball:speed() < startSpeed * 0.12, "top yeterince yavaslamadi: " .. tostring(sim.ball:speed()) .. "/" .. tostring(startSpeed))
+end)
+
+test("yan ag topu iceride tutar", function()
+	local sim = Sim.new({ seed = 3 })
+	local net = Net.new(Config, 1)
+	sim.nets[1] = net
+	local r = Config.BALL.radius
+	-- Direge yakin giren sut: top kalenin icinde yan aga carpar
+	local velocity = Ballistics.solveLaunch(Vec3.new(48, r, 1.5), Vec3.new(52.5, 1.2, 3.4), 18, Config.GRAVITY)
+	sim.ball:setState(Vec3.new(48, r, 1.5), velocity, Vec3.new(0, 0, 0))
+	sim:advance(3)
+
+	check(sim.lastGoal ~= nil, "sut gol olmadi (senaryo kurulumu)")
+	check(math.abs(sim.ball.pos.z) <= Config.PITCH.goalHalfWidth, "top yan agdan cikti: z=" .. tostring(sim.ball.pos.z))
+end)
+
+print("\n== 5e. Kaleci AI ==")
+
+test("kaleci topun geldigi yone hareket eder", function()
+	local keeper = Keeper.new(Config, 1)
+	local ball = Ball.new(Config, Vec3.new(40, 0.5, 2.0))
+	ball:setState(Vec3.new(40, 0.5, 2.0), Vec3.new(18, 1, 1.5), Vec3.new(0, 0, 0))
+	local startZ = keeper.pos.z
+	for _ = 1, 90 do
+		keeper:step(ball, 1 / 60)
+		ball:step(1 / 60)
+	end
+	check(keeper.pos.z > startZ + 0.2, "kaleci dogru yone gitmedi: " .. tostring(keeper.pos.z))
+	between(keeper.pos.z, -Config.KEEPER.reachZ, Config.KEEPER.reachZ, "kaleci konumu")
+end)
+
+test("kaleci direklerin disina cikmaz", function()
+	local keeper = Keeper.new(Config, 1)
+	local ball = Ball.new(Config, Vec3.new(40, 0.5, 0))
+	ball:setState(Vec3.new(40, 0.5, 8), Vec3.new(20, 0, 6), Vec3.new(0, 0, 0))
+	for _ = 1, 120 do
+		keeper:step(ball, 1 / 60)
+	end
+	check(math.abs(keeper.pos.z) <= Config.KEEPER.reachZ + 1e-6, "kaleci diregin disina cikti: " .. tostring(keeper.pos.z))
+end)
+
+test("kaleci govdesi sut engeller (kurtaris)", function()
+	local sim = Sim.new({ seed = 9 })
+	local r = Config.BALL.radius
+	local keeper = Keeper.new(Config, 1)
+
+	-- Kalecinin duracagi yere (z=0) dogru duz sut, govde sim'e verilir
+	local velocity = Ballistics.solveLaunch(Vec3.new(44, r, 0), Vec3.new(52.5, 1.0, 0), 20, Config.GRAVITY)
+	sim.ball:setState(Vec3.new(44, r, 0), velocity, Vec3.new(0, 0, 0))
+
+	local hits = 0
+	for _ = 1, 240 * 2 do
+		local body = keeper:step(sim.ball, Config.FIXED_DT)
+		sim.bodies[1] = body
+		sim:tick()
+		hits = body.hits or 0
+	end
+
+	check(hits >= 1, "kaleci topa temas etmedi")
+	check(sim.lastGoal == nil, "kaleci varken gol oldu")
+end)
+
 print("\n== 6. Determinizm ve sabit adim ==")
 
 test("ayni tohum + ayni girdi = bit-bit ayni sonuc", function()
@@ -638,37 +855,50 @@ test("script agaci dogru kuruldu (shared / server / client)", function()
 	check(client:FindFirstChild("BallView").ClassName == "LocalScript", "BallView LocalScript degil")
 end)
 
-test("sahne kuruldu: cim, cizgiler, iki kale, direkler, ag, top", function()
+test("sahne kuruldu: yarim saha, 1 kale, direkler, ag, kaleci, top", function()
 	local ws = installMock.workspace
 	local pitch = ws:FindFirstChild("FootballPitch")
 	check(pitch ~= nil, "FootballPitch klasoru yok")
-	check(pitch:FindFirstChild("Surface") ~= nil, "cim yok")
+
+	local surface = pitch:FindFirstChild("Surface")
+	check(surface ~= nil, "cim katmani yok")
+	local grass = surface:FindFirstChild("Grass")
+	check(grass ~= nil, "cim yok")
+	-- Yarim saha: 52.5 m * 3.5714 = 187.5 stud
+	local expectedWidth = 52.5 * 3.5714
+	check(math.abs(grass.Size.X - expectedWidth) < 1.0,
+		"cim yarim saha degil: " .. tostring(grass.Size.X) .. " (beklenen " .. tostring(expectedWidth) .. ")")
 
 	local lines = pitch:FindFirstChild("Lines")
 	check(lines ~= nil, "cizgiler yok")
-	local lineCount = #lines:GetChildren()
-	check(lineCount > 20, "cizgi sayisi cok az: " .. tostring(lineCount))
+	check(#lines:GetChildren() > 20, "cizgi sayisi cok az: " .. tostring(#lines:GetChildren()))
 
 	local goals = pitch:FindFirstChild("Goals")
-	check(goals ~= nil and #goals:GetChildren() == 2, "iki kale beklenirdi")
+	check(goals ~= nil, "kaleler yok")
+	check(#goals:GetChildren() == 1, "yarim sahada tek kale beklenirdi, gelen " .. tostring(#goals:GetChildren()))
 
-	for _, goalName in ipairs({ "GoalEast", "GoalWest" }) do
-		local goal = goals:FindFirstChild(goalName)
-		check(goal ~= nil, goalName .. " yok")
-		local posts = 0
-		for _, child in ipairs(goal:GetChildren()) do
-			if child.Name == "Post" then
-				posts = posts + 1
-			end
+	local goal = goals:FindFirstChild("GoalEast")
+	check(goal ~= nil, "GoalEast yok")
+	local posts = 0
+	for _, child in ipairs(goal:GetChildren()) do
+		if child.Name == "Post" then
+			posts = posts + 1
 		end
-		check(posts == 2, goalName .. ": iki direk beklenirdi, gelen " .. tostring(posts))
-		check(goal:FindFirstChild("Crossbar") ~= nil, goalName .. ": ust direk yok")
-		check(goal:FindFirstChild("NetBack") ~= nil, goalName .. ": ag yok")
 	end
+	check(posts == 2, "iki direk beklenirdi, gelen " .. tostring(posts))
+	check(goal:FindFirstChild("Crossbar") ~= nil, "ust direk yok")
+	check(goal:FindFirstChild("NetBack") ~= nil, "arka ag yok")
+	check(goal:FindFirstChild("NetTop") ~= nil, "ust ag yok")
+
+	local keeper = pitch:FindFirstChild("Goalkeeper")
+	check(keeper ~= nil, "kaleci modeli yok")
+	check(keeper:FindFirstChild("Body") ~= nil and keeper:FindFirstChild("Head") ~= nil, "kaleci parcalari eksik")
+	check(keeper:FindFirstChild("ArmL") ~= nil and keeper:FindFirstChild("ArmR") ~= nil, "kaleci kollari yok")
 
 	local ball = ws:FindFirstChild("MatchBall")
 	check(ball ~= nil, "top yok")
 	check(ball.Shape == "PartType.Ball", "top sekli yanlis: " .. tostring(ball.Shape))
+	check(ball.CFrame.pos.X > 0, "top yarim saha icinde baslamiyor")
 end)
 
 test("kurulum tekrar calistirilinca cogaltmiyor (idempotent)", function()

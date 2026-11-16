@@ -95,6 +95,60 @@ Config.PLAYER = {
 	staminaMinFactor = 0.72, -- yorgunken hız çarpanı
 }
 
+--[[ Oyuncu-top ilişkisi (yakın kontrol / top sürme / şut) ]]
+Config.BALL_CONTROL = {
+	bodyRadius = 0.42, -- oyuncu gövde yarıçapı (m)
+	bodyHeight = 1.80,
+	controlRadius = 1.45, -- bu mesafede top "ayakta" sayılır
+	kickReach = 1.70, -- şut atılabilen maksimum mesafe
+	dribbleReach = 1.60,
+
+	-- Dokunuş (touch) modeli: gerçekte top sürerken saniyede ~3 dokunuş olur
+	touchInterval = 0.34,
+	touchSpeedFactor = 1.0, -- (artık kullanılmıyor; dokunuş hızı çözülerek bulunuyor)
+	touchForward = 0.18, -- dokunuşun ileri bileşeni (m/s) — küçük düzeltme
+	maxTouchSpeed = 10.5,
+	sprintTouchPenalty = 0.30, -- hızlı koşarken dokunuş aşırıya kaçar (top kaçar)
+
+	-- İlk dokunuş / kapatma (trap)
+	trapSpeedThreshold = 6.0,
+	trapFactor = 0.30, -- gelen hızlı topun ne kadarı kalır
+	trapRadius = 0.95,
+
+	-- Şut
+	minKickSpeed = 13,
+	maxKickSpeed = 31,
+	chargeTime = 0.9, -- tam güç için basılı tutma süresi
+	kickHeight = 1.0, -- top bu yüksekliğin altındaysa vurulabilir
+	aimErrorDeg = 2.2, -- nişan hatası (derece, standart sapma)
+}
+
+--[[ Kaleci AI ]]
+Config.KEEPER = {
+	height = 1.90,
+	radius = 0.44,
+	lineOffset = 0.55, -- kale çizgisinden öne mesafe (m)
+	maxSpeed = 6.0, -- yan kayma hızı
+	diveSpeed = 8.5,
+	diveAccel = 22,
+	reachZ = 3.15, -- direklerin içinde kalır
+	restitution = 0.45,
+	reactionTime = 0.12,
+}
+
+--[[ File (ağ) fiziği: top ağda yavaşlar, esnetir, geri sektirmez ]]
+Config.NET = {
+	damping = 7.0, -- ağ içinde üstel hız sönümü (1/s)
+	restitution = 0.14, -- ağdan sekme katsayısı (çok ölü)
+	sideRestitution = 0.10,
+	topRestitution = 0.10,
+	friction = 0.55,
+	maxSag = 0.38, -- ağın en fazla esneme miktarı (m)
+	sagStiffness = 11.0, -- geri toplama yayı
+	sagDamping = 3.2,
+	sagImpulse = 1.7, -- çarpma hızının esnemeye dönüşümü
+}
+
 Config.MATCH = {
 	halves = 2,
 	halfLengthSeconds = 45 * 60,
