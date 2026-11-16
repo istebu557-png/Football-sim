@@ -6,83 +6,132 @@
 <title>Futbol Motoru — Prosedürel Animasyon</title>
 <style>
   :root {
-    --bg: #080c10;
-    --panel: #111a21;
-    --panel-2: #16212a;
+    --bg: #060b0f;
+    --panel: #0f1720;
+    --panel-2: #141e2a;
     --line: #22303b;
     --text: #e8eef2;
     --muted: #8fa3b0;
     --accent: #3ddc84;
     --accent-2: #45a3ff;
     --warn: #ffb454;
-    --kit: #f5d13c;
+    --kit-striker: #e84545;
+    --kit-keeper: #f5d13c;
+    --grass: #14532d;
+    --grass-dark: #0e3d21;
+    --white: #ffffff;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
-    background: radial-gradient(1200px 700px at 15% -10%, #16232c 0%, var(--bg) 62%);
+    background: radial-gradient(1400px 800px at 20% -10%, #1b2a33 0%, var(--bg) 55%);
     color: var(--text);
     font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
+    overflow: hidden;
   }
   header {
     padding: 16px 22px 12px;
     display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px;
     border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    backdrop-filter: blur(6px);
+    z-index: 10;
+    position: relative;
   }
   h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
   header .sub { color: var(--muted); font-size: 13px; }
   .badges { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
   .badge {
     font-size: 11px; padding: 3px 9px; border-radius: 999px;
-    border: 1px solid var(--line); color: var(--muted); background: var(--panel);
+    border: 1px solid var(--line); color: var(--muted); background: var(--panel-2);
   }
   .badge b { color: var(--accent); font-weight: 600; }
 
   main {
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
-    gap: 16px; padding: 16px 22px 30px; max-width: 1400px; margin: 0 auto;
+    grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr);
+    gap: 16px; padding: 16px 22px 30px; max-width: 1500px; margin: 0 auto;
+    height: calc(100vh - 80px);
+    overflow: hidden;
   }
-  @media (max-width: 940px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; height: auto; min-height: 60vh; } }
 
   .stage, aside > .card {
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
-  .stage { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-  canvas { width: 100%; height: auto; display: block; border-radius: 10px; background: #0a1410; }
+  .stage { padding: 0; display: flex; flex-direction: column; min-width: 0; position: relative; }
+  .stage-inner { padding: 14px; display: flex; flex-direction: column; gap: 10px; height: 100%; }
+  .canvas-wrap { flex: 1; min-height: 0; position: relative; border-radius: 10px; overflow: hidden; background: #071013; border: 1px solid var(--line); }
+  canvas { width: 100%; height: 100%; display: block; background: #071013; }
 
   .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   button {
     background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
     border-radius: 9px; padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer;
   }
-  button:hover { border-color: #2f4351; }
-  button.primary { background: #16301f; border-color: #265c3a; color: #b8ffd4; }
-  button.active { border-color: var(--accent-2); color: #cde9ff; }
-  input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
-  .time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 96px; }
+  button:hover { border-color: #354a5e; }
+  button:active { transform: translateY(1px); }
+  button.primary { background: #10341c; border-color: #21663a; color: #cff0d9; }
+  button.primary:hover { border-color: #3ddc84; }
+  button.primary:active { background: #164a2b; }
+  input[type=range] { flex: 1; min-width: 150px; accent-color: var(--accent); }
+  .time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 100px; }
 
-  aside { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  .card { padding: 14px; }
-  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
-  .scene-list { display: flex; flex-direction: column; gap: 6px; }
+  aside { display: flex; flex-direction: column; gap: 14px; min-width: 0; overflow-y: auto; }
+  .card { padding: 16px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .scene-list { display: flex; flex-direction: column; gap: 8px; }
   .scene-btn {
-    text-align: left; display: flex; flex-direction: column; gap: 2px;
-    border-radius: 10px; padding: 8px 10px;
+    text-align: left; display: flex; flex-direction: column; gap: 4px;
+    border-radius: 11px; padding: 10px 12px; border: 1px solid var(--line);
+    background: var(--panel-2); cursor: pointer; transition: all 0.15s;
   }
-  .scene-btn .t { font-size: 13px; }
+  .scene-btn:hover { border-color: #354a5e; background: #1b2834; }
+  .scene-btn .t { font-size: 13px; font-weight: 600; }
   .scene-btn .s { font-size: 11px; color: var(--muted); }
-  .scene-btn.sel { border-color: #2b6b46; background: #14251b; }
-  .desc { color: var(--muted); font-size: 13px; margin: 0; }
-  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
-  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-  .stat .v { font-size: 15px; font-variant-numeric: tabular-nums; }
-  .note { color: var(--muted); font-size: 12px; line-height: 1.55; }
+  .scene-btn.sel { border-color: #3ddc84; background: #10341c; box-shadow: 0 0 0 2px rgba(61,220,132,0.15); }
+  .desc { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+  .stat .v { font-size: 15px; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .note { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
   .note b { color: var(--text); font-weight: 600; }
-  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
-  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; margin-top: 10px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,0.35); }
+
+  /* Kit color chips */
+  .kit-chip { display: inline-block; width: 12px; height: 12px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.4); }
+
+  /* Loading overlay */
+  #loading {
+    position: absolute; inset: 0; background: var(--panel); display: flex;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 12px; z-index: 20; border-radius: 10px;
+  }
+  #loading .spinner {
+    width: 32px; height: 32px; border: 3px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Contact flash */
+  #contact-flash {
+    position: absolute; inset: 0; pointer-events: none; z-index: 15;
+    background: radial-gradient(circle, rgba(69,163,255,0.25) 0%, transparent 60%);
+    opacity: 0; transition: opacity 0.15s ease-out;
+  }
+  #contact-flash.active { opacity: 1; transition: none; }
+
+  .empty-state {
+    grid-column: 1 / -1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; height: 40vh;
+    color: var(--muted); text-align: center;
+  }
+  .empty-state b { color: var(--text); }
 </style>
 </head>
 <body>
@@ -98,7 +147,11 @@
 
 <main>
   <section class="stage">
-    <canvas id="cv" width="1000" height="640"></canvas>
+    <div id="contact-flash"></div>
+    <div id="loading"><div class="spinner"></div><div>Sahne yükleniyor…</div></div>
+    <div class="canvas-wrap">
+      <canvas id="cv" width="1000" height="640"></canvas>
+    </div>
     <div class="controls">
       <button id="play" class="primary">Duraklat</button>
       <input id="scrub" type="range" min="0" max="100" value="0" step="1" />
@@ -106,20 +159,22 @@
       <button id="view">Görünüm: <span id="viewName">yandan</span></button>
     </div>
     <div class="legend">
-      <span><span class="swatch" style="background:#f5d13c"></span>forma / iskelet</span>
+      <span><span class="swatch" style="background:#f5d13c"></span>kemik / iskelet</span>
       <span><span class="swatch" style="background:#e8eef2"></span>top</span>
       <span><span class="swatch" style="background:#45a3ff"></span>temas anı</span>
+      <span><span class="swatch" style="background:#e84545"></span>şutçu forma</span>
+      <span><span class="swatch" style="background:#f5d13c"></span>kaleci forma</span>
       <span>boşluk: oynat/duraklat · ← →: kare kare</span>
     </div>
   </section>
 
   <aside>
     <div class="card">
-      <h2>Hareketler</h2>
+      <h2>🎯 Hareketler</h2>
       <div class="scene-list" id="list"></div>
     </div>
     <div class="card">
-      <h2>Açıklama</h2>
+      <h2>📋 Açıklama</h2>
       <p class="desc" id="desc">Yükleniyor…</p>
       <div class="stats">
         <div class="stat"><div class="k">süre</div><div class="v" id="sDur">—</div></div>
@@ -129,7 +184,7 @@
       </div>
     </div>
     <div class="card">
-      <h2>Nasıl üretiliyor?</h2>
+      <h2>⚙️ Nasıl üretiliyor?</h2>
       <p class="note">
         Her karede <b>KickAnim</b> / <b>KeeperAnim</b> bir poz tablosu döndürür:
         hangi eklem kaç radyan dönmüş. <b>Rig.solve</b> bu pozu ileri kinematikle
@@ -141,6 +196,10 @@
         güç girdi. Kaleci: topun kaleye varacağı nokta ve yükseklik girdi;
         hareket tipi (blok / dalış / zıplama) buradan seçiliyor.
       </p>
+      <div class="legend">
+        <span><span class="kit-chip" style="background:#e84545"></span>şutçu (kırmızı)</span>
+        <span><span class="kit-chip" style="background:#f5d13c"></span>kaleci (sarı)</span>
+      </div>
     </div>
   </aside>
 </main>
@@ -160,6 +219,8 @@ const sDur = document.getElementById("sDur");
 const sFrames = document.getElementById("sFrames");
 const sKind = document.getElementById("sKind");
 const sHand = document.getElementById("sHand");
+const loadingEl = document.getElementById("loading");
+const flashEl = document.getElementById("contact-flash");
 
 let data = null;
 let scenes = [];
@@ -172,6 +233,9 @@ let forceView = null; // null | "side" | "front"
 
 const JOINT = {};
 const HEAD_INDEX = 3;
+
+// Kit renkleri: sahneye göre otomatik belirlenir (kaleci sarı, şutçu kırmızı)
+function sceneIsKeeper(sc) { return sc.view === "front"; }
 
 function setScene(i) {
   sceneIndex = i;
@@ -186,6 +250,7 @@ function setScene(i) {
   sHand.textContent = maxHandHeight(scene).toFixed(2) + " m";
   [...listEl.children].forEach((b, k) => b.classList.toggle("sel", k === i));
   updateViewLabel();
+  loadingEl.style.display = "none";
   draw();
 }
 
@@ -204,7 +269,6 @@ function maxHandHeight(sc) {
 
 function project(p) {
   const v = forceView || scene.view;
-  // p = [x, y, z] metre, rig uzayı (x sağ, y yukarı, z ileri)
   if (v === "front") return [p[0], p[1]];
   return [p[2], p[1]];
 }
@@ -219,143 +283,290 @@ function bounds(sc) {
     }
   }
   const bx = project([sc.ball[0], sc.ball[1], sc.ball[2]]);
-  minX = Math.min(minX, bx[0] - 0.3); maxX = Math.max(maxX, bx[0] + 0.3);
-  minY = Math.min(minY, bx[1] - 0.3); maxY = Math.max(maxY, bx[1] + 0.3);
+  minX = Math.min(minX, bx[0] - 0.6); maxX = Math.max(maxX, bx[0] + 0.6);
+  minY = Math.min(minY, bx[1] - 0.6); maxY = Math.max(maxY, bx[1] + 0.6);
   return { minX, maxX, minY, maxY };
 }
+
+// --- Çizim yardımcıları ---
+
+function drawPitch() {
+  const W = cv.width, H = cv.height;
+  const v = forceView || scene.view;
+
+  // Çim arkaplanı (ikili tonlu)
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, "#0e3d21");
+  g.addColorStop(0.5, "#14532d");
+  g.addColorStop(1, "#0e3d21");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // Kenar çizgileri
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(40, 40); ctx.lineTo(W - 40, 40);
+  ctx.moveTo(40, H - 40); ctx.lineTo(W - 40, H - 40);
+  ctx.stroke();
+
+  // Kalemeşer alanları (basit dikdörtgenler, kenardan biraz içeri)
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 2;
+  const gw = W * 0.22, gh = H * 0.45;
+  // Sol kalemeşer
+  ctx.strokeRect(40, (H - gh) / 2, gw, gh);
+  // Sağ kalemeşer
+  ctx.strokeRect(W - 40 - gw, (H - gh) / 2, gw, gh);
+  // Kalemeşer noktaları
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
+  ctx.beginPath();
+  ctx.arc(40 + gw / 2, H / 2, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(W - 40 - gw / 2, H / 2, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Orta daire
+  ctx.beginPath();
+  ctx.arc(W / 2, H / 2, W * 0.10, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Kalemeşer kirişi (sadece yandan görünümde)
+  if (v === "side") {
+    ctx.strokeStyle = "rgba(255,255,255,0.20)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(W * 0.72, 40); ctx.lineTo(W * 0.72, H - 40); // kalemeşer çizgisi
+    ctx.stroke();
+    // Kalemeşer kirişi (basit)
+    ctx.beginPath();
+    ctx.moveTo(W * 0.72, H / 2 - 60); ctx.lineTo(W * 0.78, H / 2 - 60);
+    ctx.lineTo(W * 0.78, H / 2 + 60); ctx.lineTo(W * 0.72, H / 2 + 60);
+    ctx.stroke();
+  }
+}
+
+function drawBall(bx, by, br, spinX, spinZ) {
+  // Top gölge
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.beginPath();
+  ctx.arc(bx + 2, by + 2, br, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Beyaz top
+  const grad = ctx.createRadialGradient(bx - br * 0.3, by - br * 0.3, br * 0.2, bx, by, br);
+  grad.addColorStop(0, "#ffffff");
+  grad.addColorStop(1, "#dbe7ee");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(bx, by, br, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.25)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Topun üzerindeki spinyokuşu (yön ok)
+  if (Math.abs(spinX) > 0.5 || Math.abs(spinZ) > 0.5) {
+    const len = br * 1.6;
+    const ang = Math.atan2(spinZ, spinX);
+    ctx.strokeStyle = "#45a3ff";
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + Math.cos(ang) * len, by - Math.sin(ang) * len);
+    ctx.stroke();
+    // Ok başı
+    ctx.beginPath();
+    ctx.moveTo(bx + Math.cos(ang) * len, by - Math.sin(ang) * len);
+    ctx.lineTo(bx + Math.cos(ang + 0.4) * (len * 0.5), by - Math.sin(ang + 0.4) * (len * 0.5));
+    ctx.lineTo(bx + Math.cos(ang - 0.4) * (len * 0.5), by - Math.sin(ang - 0.4) * (len * 0.5));
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+function drawJoint(x, y, r) {
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawBone(pa, pb, radius, isTorso, kitColor) {
+  // Gölge kemik
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = Math.max(4, radius * 2.2 * scale);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(pa[0] + 1, pa[1] + 1);
+  ctx.lineTo(pb[0] + 1, pb[1] + 1);
+  ctx.stroke();
+
+  // Ana kemik
+  ctx.strokeStyle = kitColor;
+  ctx.lineWidth = Math.max(3, radius * 2 * scale);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(pa[0], pa[1]);
+  ctx.lineTo(pb[0], pb[1]);
+  ctx.stroke();
+
+  // Eklem daireleri (başlangıç ve bitiş)
+  drawJoint(pa[0], pa[1], Math.max(3, radius * 1.4 * scale));
+  drawJoint(pb[0], pb[1], Math.max(3, radius * 1.4 * scale));
+}
+
+let scale = 1;
 
 function draw() {
   const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
 
-  // arka plan: çim + ufuk
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, "#0d1b16");
-  g.addColorStop(1, "#0a1410");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-
   if (!scene) return;
+
+  // --- Sahış arkaplanı ---
+  drawPitch();
+
   const v = forceView || scene.view;
   const b = bounds(scene);
-  const padX = 70, padTop = 70, padBottom = 80;
-  const spanX = Math.max(0.9, b.maxX - b.minX);
-  const spanY = Math.max(1.2, b.maxY - b.minY);
-  const scale = Math.min((W - padX * 2) / spanX, (H - padTop - padBottom) / spanY);
+  const padX = 90, padTop = 70, padBottom = 110;
+  const spanX = Math.max(1.0, b.maxX - b.minX);
+  const spanY = Math.max(1.4, b.maxY - b.minY);
+  scale = Math.min((W - padX * 2) / spanX, (H - padTop - padBottom) / spanY);
   const originX = W / 2;
-  const groundY = H - padBottom;
+  const groundY = H - padBottom + 20;
 
   function toScreen(q) {
     const cx = (b.minX + b.maxX) / 2;
     return [originX + (q[0] - cx) * scale, groundY - (q[1] - 0) * scale];
   }
 
-  // zemin çizgisi
-  ctx.strokeStyle = "rgba(140,180,160,0.35)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, groundY + 1);
-  ctx.lineTo(W, groundY + 1);
-  ctx.stroke();
-
-  // kare indeksi (oynatırken frame ondalık olabilir)
-  const fi = Math.max(0, Math.min(scene.frames.length - 1, Math.round(frame)));
-
-  // zemin gölgesi: figürün altında
-  const f = scene.frames[fi];
-  const rootP = f[JOINT["root"]];
-  const rootQ = project(rootP);
-  const gx = toScreen(rootQ)[0];
-  ctx.fillStyle = "rgba(0,0,0,0.35)";
-  ctx.beginPath();
-  ctx.ellipse(gx, groundY + 2, 42, 10, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // top
-  const ball = scene.ball;
-  const ballQ = project([ball[0], ball[1], ball[2]]);
-  const bs = toScreen(ballQ);
-  const br = 0.11 * scale;
-  ctx.fillStyle = "#f2f5f8";
-  ctx.beginPath();
-  ctx.arc(bs[0], bs[1], Math.max(4, br), 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(20,30,40,0.5)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // temas anı halkası
-  if (scene.contact > 0) {
-    const t = fi / scene.fps;
-    if (t >= scene.contact - 0.06 && t <= scene.contact + 0.12) {
-      const k = (t - (scene.contact - 0.06)) / 0.18;
-      ctx.strokeStyle = "rgba(69,163,255," + (0.9 - 0.6 * k).toFixed(3) + ")";
-      ctx.lineWidth = 2.5;
+  // Şut yörünge izi (topun mevcut konumundan ileri doğru, sadece şut sahnelerinde)
+  if (v === "side" && !sceneIsKeeper(scene) && scene.contact) {
+    const tNow = (frame / scene.fps);
+    if (tNow > scene.contact) {
+      const steps = 20;
+      ctx.strokeStyle = "rgba(69,163,255,0.30)";
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
       ctx.beginPath();
-      ctx.arc(bs[0], bs[1], Math.max(8, br) + k * 26, 0, Math.PI * 2);
+      const start = project([scene.ball[0], scene.ball[1], scene.ball[2]]);
+      let p0 = toScreen(start);
+      ctx.moveTo(p0[0], p0[1]);
+      // Top ileri doğru (z+) ve yukarı (y+) doğru basit bir yol çizer
+      for (let i = 1; i <= steps; i++) {
+        const frac = i / steps;
+        const dist = 3.0 * frac;
+        const h = scene.ball[1] * Math.sin(frac * Math.PI) * 0.6;
+        const sp = project([scene.ball[0], scene.ball[1] + h, scene.ball[2] + dist]);
+        const p1 = toScreen(sp);
+        ctx.lineTo(p1[0], p1[1]);
+      }
       ctx.stroke();
     }
   }
 
-  // kemikler
-  const joints = scene.frames[fi];
+  // Zemin gölgesi (figürün altında)
+  const f = scene.frames[Math.max(0, Math.min(scene.frames.length - 1, Math.round(frame)))];
+  const rootP = f[JOINT["root"]];
+  const rootQ = project(rootP);
+  const gx = toScreen(rootQ)[0];
+  const gy = groundY + 4;
+  ctx.fillStyle = "rgba(0,0,0,0.40)";
+  ctx.beginPath();
+  ctx.ellipse(gx, gy, 46 * scale, 10 * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Kontakt flaş (temas anı)
+  const t = frame / scene.fps;
+  if (scene.contact > 0 && t >= scene.contact - 0.05 && t <= scene.contact + 0.08) {
+    flashEl.classList.add("active");
+    const k = Math.min(1, (t - (scene.contact - 0.05)) / 0.13);
+    const ballQ = project([scene.ball[0], scene.ball[1], scene.ball[2]]);
+    const bs = toScreen(ballQ);
+    ctx.fillStyle = `rgba(69,163,255,${0.35 * (1 - k)})`;
+    ctx.beginPath();
+    ctx.arc(bs[0], bs[1], 28 * scale + k * 40, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    flashEl.classList.remove("active");
+  }
+
+  // Top
+  const ball = scene.ball;
+  const ballQ = project([ball[0], ball[1], ball[2]]);
+  const bs = toScreen(ballQ);
+  const br = Math.max(5, 0.11 * scale);
+  drawBall(bs[0], bs[1], br, 0, 0);
+
+  // Kemikler
+  const joints = f;
   const pts = joints.map(p => toScreen(project(p)));
 
+  // Renk: kaleci sarı, şutçu kırmızı
+  const kitColor = sceneIsKeeper(scene) ? "#f5d13c" : "#e84545";
+
   for (const bone of data.bones) {
-    // JSON'daki kemik indeksleri 1 tabanlı (Lua), pts 0 tabanlı
     const a = bone[0] - 1, bIdx = bone[1] - 1, radius = bone[2];
     const pa = pts[a], pb = pts[bIdx];
     const isTorso = radius > 0.12;
-    ctx.strokeStyle = isTorso ? "#f5d13c" : (radius > 0.06 ? "#d9c245" : "#e6d67a");
-    ctx.lineWidth = Math.max(3, radius * 2 * scale);
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(pa[0], pa[1]);
-    ctx.lineTo(pb[0], pb[1]);
-    ctx.stroke();
+    drawBone(pa, pb, radius, isTorso, kitColor);
   }
 
-  // kafa
+  // Kafa
   const head = pts[HEAD_INDEX];
   ctx.fillStyle = "#e9c3a5";
   ctx.beginPath();
   ctx.arc(head[0], head[1], Math.max(6, 0.12 * scale), 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.25)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
-  // eldivenler
+  // Eldivenler
   for (const name of ["handL", "handR"]) {
     const p = pts[JOINT[name]];
     ctx.fillStyle = "#f7fbff";
     ctx.beginPath();
     ctx.arc(p[0], p[1], Math.max(3.5, 0.07 * scale), 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
-  // zaman çubuğu + saat
-  const t = fi / scene.fps;
-  timeEl.textContent = t.toFixed(2) + " s";
+  // Zaman çubuğu (canvas üstüne çiz, sürekli güncellenir)
   const prog = Math.min(1, t / scene.duration);
   ctx.fillStyle = "rgba(255,255,255,0.10)";
-  ctx.fillRect(padX, H - 26, W - padX * 2, 4);
-  ctx.fillStyle = "#3ddc84";
-  ctx.fillRect(padX, H - 26, (W - padX * 2) * prog, 4);
+  ctx.fillRect(padX, H - 28, W - padX * 2, 4);
+  ctx.fillStyle = kitColor;
+  ctx.fillRect(padX, H - 28, (W - padX * 2) * prog, 4);
   if (scene.contact > 0) {
     const cxp = padX + (W - padX * 2) * Math.min(1, scene.contact / scene.duration);
     ctx.fillStyle = "#45a3ff";
-    ctx.fillRect(cxp - 1.5, H - 30, 3, 12);
+    ctx.fillRect(cxp - 1.5, H - 33, 3, 14);
   }
 
-  // ölçek göstergesi (1 m)
-  ctx.strokeStyle = "rgba(232,238,242,0.5)";
+  // Ölçek göstergesi (1 m)
+  ctx.strokeStyle = "rgba(232,238,242,0.55)";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(W - 130, H - 54);
-  ctx.lineTo(W - 130 + scale, H - 54);
+  ctx.moveTo(W - 130, H - 56);
+  ctx.lineTo(W - 130 + scale, H - 56);
   ctx.stroke();
-  ctx.fillStyle = "rgba(232,238,242,0.65)";
-  ctx.font = "12px ui-sans-serif, system-ui";
-  ctx.fillText("1 m", W - 130, H - 60);
-  ctx.fillText(v === "front" ? "önden görünüm (yanal eksen = x)" : "yandan görünüm (ileri eksen = z)", padX, 34);
+  ctx.fillStyle = "rgba(232,238,242,0.75)";
+  ctx.font = "11px ui-sans-serif, system-ui";
+  ctx.fillText("1 m", W - 130, H - 62);
+  ctx.fillText(v === "front" ? "önden görünüm (x)" : "yandan görünüm (z)", padX, 32);
+
+  // Zaman etiketi
+  timeEl.textContent = t.toFixed(2) + " s";
 }
 
 function tick(ts) {
@@ -376,9 +587,7 @@ function tick(ts) {
   requestAnimationFrame(tick);
 }
 
-
-
-// --- etkileşim
+// --- Etkileşim ---
 playBtn.addEventListener("click", () => {
   playing = !playing;
   playBtn.textContent = playing ? "Duraklat" : "Oynat";
@@ -402,7 +611,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "ArrowLeft") { playing = false; playBtn.textContent = "Oynat"; frame = Math.max(0, frame - 1); scrub.value = String(Math.floor(frame)); draw(); }
 });
 
-// --- yükleme
+// --- Yükleme ---
 fetch("anim.json")
   .then(r => r.json())
   .then(json => {
@@ -412,8 +621,9 @@ fetch("anim.json")
     scenes.forEach((sc, i) => {
       const btn = document.createElement("button");
       btn.className = "scene-btn";
+      const isKeeper = sceneIsKeeper(sc);
       btn.innerHTML = '<span class="t">' + sc.label + "</span><span class=\"s\">" +
-        (sc.view === "front" ? "kaleci" : "şut") + " · " + sc.duration.toFixed(2) + " s</span>";
+        (isKeeper ? "kaleci" : "şutçu") + " · " + sc.duration.toFixed(2) + " s</span>";
       btn.addEventListener("click", () => setScene(i));
       listEl.appendChild(btn);
     });
@@ -424,8 +634,6 @@ fetch("anim.json")
     descEl.textContent = "anim.json yüklenemedi: " + err.message + " — önce `npm run anim` çalıştır.";
     console.error(err);
   });
-
-// zaman etiketi draw() içinde güncelleniyor
 </script>
 </body>
 </html>
