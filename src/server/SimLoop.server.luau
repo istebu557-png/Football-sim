@@ -209,14 +209,13 @@ local keeperDiveRef = nil
 
 local READY_POSE = KeeperAnim.new({ dz = 0, height = 0.5 }):sample(0.15).pose
 
--- Kaleci pozu: dalış hedefi değiştiğinde yeni animasyon başlar
+-- Kaleci pozu: yeni dalış hedefi geldiğinde animasyon başlar; süresi bittiğinde READY_POSE'a döner.
 local function keeperPose(dt)
 	if not ANIM.keeperPoseEnabled then
 		return nil
 	end
 	local target = keeper.diveTarget
-	if target and target ~= keeperDiveRef then
-		keeperDiveRef = target
+	if target and (not keeperAnim or keeperAnimT >= keeperAnim:duration()) then
 		keeperAnim = KeeperAnim.new({
 			dz = target.dz,
 			height = target.height,
@@ -230,7 +229,6 @@ local function keeperPose(dt)
 			return keeperAnim:sample(keeperAnimT).pose
 		end
 		keeperAnim = nil
-		keeperDiveRef = keeper.diveTarget
 	end
 	return READY_POSE
 end
