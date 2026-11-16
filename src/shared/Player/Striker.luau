@@ -26,12 +26,36 @@ Striker.MAX_WAIT = 1.2 -- hareketli topa bekleme süresi (s)
 
 local clamp01 = Ease.clamp01
 
--- Şut hedefleri: döngüyle değişir (alt köşe -> üst köşe -> orta)
-local TARGETS = {
-	{ z = 2.55, y = 0.32 },
-	{ z = -2.40, y = 1.90 },
-	{ z = 1.05, y = 0.85 },
-}
+-- Kaleci pozisyonuna göre dinamik şut hedefi seçer.
+-- Kaleci sola genişlerse (dz < -1) sağ köşeye, sağa genişlerse (dz > 1) sol köşeye,
+-- ortadaysa (-1 <= dz <= 1) yüksek köşeye veya ortaya döngüyle şut atar.
+function Striker:selectTarget(keeperPos)
+	local goal = self:goalPoint()
+	local dz = keeperPos and keeperPos.z or 0
+
+	local targetZ, targetY
+	if dz < -1.0 then
+		-- Kaleci solda -> sağ alt köşe
+		targetZ = 2.55
+		targetY = 0.32
+	elseif dz > 1.0 then
+		-- Kaleci sağda -> sol alt köşe
+		targetZ = -2.40
+		targetY = 0.32
+	else
+		-- Kaleci ortada -> yüksek köşe / orta (döngüyle değiştir)
+		self.aimIndex = (self.aimIndex % 2) + 1
+		if self.aimIndex == 1 then
+			targetZ = -2.40
+			targetY = 1.90
+		else
+			targetZ = 1.05
+			targetY = 0.85
+		end
+	end
+
+	return Vec3.new(goal.x, targetY, targetZ)
+end
 
 function Striker.new(cfg, opts)
 	opts = opts or {}
@@ -77,15 +101,15 @@ function Striker:ballGeometry(ball)
 	}
 end
 
-function Striker:beginKick(ball)
+function Striker:beginKick(ball, keeperPos)
 	local geo = self:ballGeometry(ball)
 	local goal = self:goalPoint()
 	local dx = goal.x - ball.pos.x
 	local dz = goal.z - ball.pos.z
 	local distGoal = math.sqrt(dx * dx + dz * dz)
 
-	self.aimIndex = (self.aimIndex % #TARGETS) + 1
-	local aim = TARGETS[self.aimIndex]
+	-- Kaleci pozisyonuna göre dinamik hedef
+	self.target = self:selectTarget(keeperPos)
 
 	-- Uzaktan sert, yakından kontrollü
 	local charge = clamp01(0.42 + distGoal / 42)
@@ -99,7 +123,6 @@ function Striker:beginKick(ball)
 	})
 	self.kickT = 0
 	self.speed = speed
-	self.target = Vec3.new(goal.x, aim.y, aim.z)
 	self.state = "kick"
 	self.shots = self.shots + 1
 	return self.kick
@@ -107,7 +130,7 @@ end
 
 --[[ Bir adım. Dönüş: nil veya {
 		type = "shoot", kick = KickAnim, target = Vec3 (metre), speed = m/s } ]]
-function Striker:step(dt, ball)
+function Striker:step(dt, ball, keeper)
 	self.time = self.time + dt
 	if self.cooldown > 0 then
 		self.cooldown = math.max(0, self.cooldown - dt)
@@ -177,7 +200,7 @@ function Striker:step(dt, ball)
 	end
 
 	self.facing = Vec3.yaw(Vec3.withY(Vec3.sub(self:goalPoint(), self.pos), 0))
-	self:beginKick(ball)
+	self:beginKick(ball, keeper and keeper.pos or nil)
 	return nil
 end
 

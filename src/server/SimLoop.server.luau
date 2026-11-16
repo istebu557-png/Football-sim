@@ -262,7 +262,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 
 	-- 2) Şutçu NPC: yürü -> şut pozisyonu -> TEMAS anında top ayrılır
 	if ANIM.strikerEnabled and strikerModel then
-		local shot = striker:step(frameDt, sim.ball)
+		local shot = striker:step(frameDt, sim.ball, keeper)
 		if shot and shot.type == "shoot" then
 			local velocity = Ballistics.solveLaunch(sim.ball.pos, shot.target, shot.speed, Config.GRAVITY)
 			if velocity then

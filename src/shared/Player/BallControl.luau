@@ -102,7 +102,7 @@ function BallControl:update(ball, player, now)
 		     => v_top = v_oyuncu + 0.5*a*t
 		     Bu yüzden iyi bir top sürücü neredeyse hiç hız kaybetmez; top ayağından
 		     kaçmaz. Sprint cezası bu hedefi büyütür (aşırı vurulan dokunuş). ]]
-		local dir = Vec3.unit(Vec3.add(Vec3.scale(facingDir, 1.0), Vec3.scale(flatDir, 0.35)))
+		local dir = Vec3.unit(Vec3.add(Vec3.scale(facingDir, 0.80), Vec3.scale(flatDir, 0.20)))
 		local a = self.cfg.BALL.rollResistance * self.cfg.GRAVITY
 		local baseSpeed = playerSpeed + 0.5 * a * BC.touchInterval
 		local targetSpeed = (baseSpeed + BC.touchForward) * controlFactor
