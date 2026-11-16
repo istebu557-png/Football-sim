@@ -1,0 +1,15 @@
+{
+  "name": "roblox-football-sim",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Roblox icin deterministik futbol simulasyon motoru (Luau)",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node tools/runner.js",
+    "trace": "node tools/runner.js --trace",
+    "preview": "node tools/serve.js"
+  },
+  "devDependencies": {
+    "fengari-node-cli": "^2.4.1"
+  }
+}
