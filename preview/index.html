@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Futbol Motoru — Top Fiziği</title>
+<style>
+  :root {
+    --bg: #0b1014;
+    --panel: #121a21;
+    --panel-2: #16212a;
+    --line: #22303b;
+    --text: #e8eef2;
+    --muted: #8fa3b0;
+    --accent: #3ddc84;
+    --accent-2: #45a3ff;
+    --warn: #ffb454;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(1200px 700px at 20% -10%, #16232c 0%, var(--bg) 60%);
+    color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 18px 22px 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .badges { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    font-size: 11px; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+    background: var(--panel);
+  }
+  .badge b { color: var(--accent); font-weight: 600; }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(300px, 1fr);
+    gap: 16px;
+    padding: 16px 22px 26px;
+    max-width: 1360px;
+    margin: 0 auto;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .stage, aside > .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+  }
+  .stage { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tab {
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+    padding: 7px 12px; border-radius: 9px; cursor: pointer; font-size: 12.5px;
+    font-family: inherit; transition: all .15s ease;
+  }
+  .tab:hover { color: var(--text); border-color: #31424f; }
+  .tab.active { background: #16301f; border-color: #2a6b45; color: var(--accent); }
+  canvas { display: block; width: 100%; border-radius: 10px; }
+  #pitch { background: #0e1a12; aspect-ratio: 105 / 68; }
+  #side { background: #0c1418; aspect-ratio: 2.1 / 1; }
+  .desc { color: var(--muted); font-size: 12.5px; padding: 0 4px; min-height: 34px; }
+  .desc b { color: var(--text); font-weight: 600; }
+
+  aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .card { padding: 14px; }
+  .card h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 0 0 12px; font-weight: 600;
+  }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .metric { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; }
+  .metric .k { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .metric .v { font-size: 18px; font-weight: 650; letter-spacing: -0.02em; margin-top: 2px; }
+  .metric .v small { font-size: 11px; color: var(--muted); font-weight: 500; margin-left: 2px; }
+  .metric.wide { grid-column: span 2; }
+  .goal { color: var(--accent); }
+  .miss { color: var(--warn); }
+  .hint { color: var(--muted); font-size: 11.5px; margin-top: 10px; }
+  footer {
+    color: var(--muted); font-size: 11.5px; text-align: center;
+    padding: 0 22px 26px; max-width: 900px; margin: 0 auto;
+  }
+  footer code { color: #b9c9d4; background: #141d24; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Futbol Simülasyon Motoru</h1>
+  <span class="sub">Adım 1 — Top fiziği çekirdeği</span>
+  <div class="badges">
+    <span class="badge"><b>240 Hz</b> sabit adım</span>
+    <span class="badge">drag + <b>drag crisis</b></span>
+    <span class="badge"><b>Magnus</b> / falso</span>
+    <span class="badge">analitik sekme</span>
+  </div>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="tabs" id="tabs"></div>
+    <canvas id="pitch"></canvas>
+    <div class="desc" id="desc"></div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h2>Ölçümler</h2>
+      <div class="metrics" id="metrics"></div>
+      <div class="hint">Değerler simülasyonun kendi telemetrisinden gelir, elle girilmemiştir.</div>
+    </div>
+    <div class="card">
+      <h2 id="sideTitle">Yandan görünüm — yükseklik</h2>
+      <canvas id="side"></canvas>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  Bu sayfa bir Roblox oyunu değil, motorun <b>doğrulama aracı</b>dır. Çizilen her nokta
+  <code>src/shared/Physics/Ball.luau</code> içindeki 240 Hz simülasyonun kaydıdır;
+  veri <code>node tools/runner.js --trace</code> ile üretilir.
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  const CROSSBAR = 2.44, POST_HALF = 3.66, GOAL_DEPTH = 2.0;
+  const STATE = { data: null, index: 0, time: 0, playing: true, last: 0 };
+
+  const pitchCanvas = document.getElementById("pitch");
+  const sideCanvas = document.getElementById("side");
+  const tabsEl = document.getElementById("tabs");
+  const descEl = document.getElementById("desc");
+  const metricsEl = document.getElementById("metrics");
+  const sideTitleEl = document.getElementById("sideTitle");
+
+  function fit(canvas) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w: rect.width, h: rect.height };
+  }
+
+  function colorFor(id) {
+    return id === "falso" ? "#8b7bff" : id === "asirtma" ? "#ffb454"
+      : id === "sekme" ? "#45a3ff" : id === "direk" ? "#ff6b6b"
+      : id === "file" ? "#ffd166" : "#3ddc84";
+  }
+
+  // ---------- Saha (üstten görünüm) ----------
+  function drawPitch() {
+    const { ctx, w, h } = fit(pitchCanvas);
+    const P = STATE.data.pitch;
+    const margin = 4;
+    const scale = Math.min(w / (P.length + margin * 2), h / (P.width + margin * 2));
+    const ox = w / 2, oy = h / 2;
+    const toX = (x) => ox + x * scale;
+    const toY = (z) => oy + z * scale; // z aşağı doğru: izleyici perspektifi
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Çim + biçme şeritleri
+    ctx.fillStyle = "#14301f";
+    ctx.fillRect(toX(-P.length / 2), toY(-P.width / 2), P.length * scale, P.width * scale);
+    const stripes = 10;
+    for (let i = 0; i < stripes; i++) {
+      if (i % 2 === 1) continue;
+      ctx.fillStyle = "rgba(255,255,255,0.028)";
+      ctx.fillRect(
+        toX(-P.length / 2 + (P.length / stripes) * i), toY(-P.width / 2),
+        (P.length / stripes) * scale, P.width * scale
+      );
+    }
+
+    ctx.strokeStyle = "rgba(233,245,255,0.72)";
+    ctx.lineWidth = Math.max(1, scale * 0.18);
+    ctx.lineJoin = "round";
+
+    const rect = (x1, z1, x2, z2) => {
+      ctx.beginPath();
+      ctx.rect(toX(x1), toY(z1), (x2 - x1) * scale, (z2 - z1) * scale);
+      ctx.stroke();
+    };
+
+    // Dış çizgiler
+    rect(-P.length / 2, -P.width / 2, P.length / 2, P.width / 2);
+    // Orta çizgi + orta yuvarlak
+    ctx.beginPath();
+    ctx.moveTo(toX(0), toY(-P.width / 2));
+    ctx.lineTo(toX(0), toY(P.width / 2));
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(toX(0), toY(0), 9.15 * scale, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(toX(0), toY(0), Math.max(1.5, scale * 0.22), 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(233,245,255,0.72)";
+    ctx.fill();
+
+    // Ceza sahaları, kale sahaları, penaltı noktaları
+    for (const s of [-1, 1]) {
+      const gl = (P.length / 2) * s;
+      rect(gl - s * 16.5, -20.16, gl, 20.16);
+      rect(gl - s * 5.5, -9.16, gl, 9.16);
+      ctx.beginPath();
+      ctx.arc(toX(gl - s * 11), toY(0), Math.max(1.4, scale * 0.2), 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(233,245,255,0.72)";
+      ctx.fill();
+      // Kale
+      ctx.strokeStyle = "rgba(233,245,255,0.9)";
+      ctx.lineWidth = Math.max(1.2, scale * 0.26);
+      ctx.beginPath();
+      ctx.rect(toX(gl), toY(-POST_HALF), Math.abs(GOAL_DEPTH * scale) * s, POST_HALF * 2 * scale);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(233,245,255,0.72)";
+      ctx.lineWidth = Math.max(1, scale * 0.18);
+    }
+
+    const shot = STATE.data.shots[STATE.index];
+    const path = shot.path;
+
+    // Nişan çizgisi
+    if (shot.aim) {
+      ctx.save();
+      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = "rgba(143,163,176,0.5)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(toX(path[0][0]), toY(path[0][2]));
+      ctx.lineTo(toX(shot.aim[0]), toY(shot.aim[2]));
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (shot.type === "drop") {
+      // Zıplayan top: üstten görünümde konum sabit, yükseklikle büyüyen gölge
+      const p = path[Math.min(path.length - 1, Math.floor(STATE.time * 60))];
+      const lift = Math.min(1, p[1] / 2.2);
+      ctx.beginPath();
+      ctx.arc(toX(0), toY(0), (0.7 + lift * 2.2) * scale, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(69,163,255,${0.10 + lift * 0.22})`;
+      ctx.fill();
+    } else {
+      // Yol
+      ctx.lineCap = "round";
+      ctx.strokeStyle = colorFor(shot.id) + "33";
+      ctx.lineWidth = Math.max(2.5, scale * 0.55);
+      ctx.beginPath();
+      path.forEach((p, i) => (i ? ctx.lineTo(toX(p[0]), toY(p[2])) : ctx.moveTo(toX(p[0]), toY(p[2]))));
+      ctx.stroke();
+
+      // Geçilen kısım parlak
+      const traveled = Math.min(path.length - 1, STATE.time * 60);
+      ctx.strokeStyle = colorFor(shot.id);
+      ctx.lineWidth = Math.max(1.5, scale * 0.28);
+      ctx.beginPath();
+      for (let i = 0; i < path.length; i++) {
+        if (i > traveled) break;
+        const p = path[i];
+        if (i === 0) ctx.moveTo(toX(p[0]), toY(p[2]));
+        else ctx.lineTo(toX(p[0]), toY(p[2]));
+      }
+      ctx.stroke();
+    }
+
+    // Top
+    const idx = Math.min(path.length - 1, Math.max(0, STATE.time * 60));
+    const i0 = Math.floor(idx), i1 = Math.min(path.length - 1, i0 + 1), f = idx - i0;
+    const p0 = path[i0], p1 = path[i1];
+    const bx = p0[0] + (p1[0] - p0[0]) * f;
+    const bz = p0[2] + (p1[2] - p0[2]) * f;
+    const by = p0[1] + (p1[1] - p0[1]) * f;
+
+    const ballR = Math.max(4.5, 0.11 * scale * 2.2);
+    // Gölge (yükseklik arttıkça uzaklaşır ve soluklaşır)
+    const liftPx = Math.min(40, by * scale * 0.55);
+    ctx.beginPath();
+    ctx.ellipse(toX(bx) + liftPx * 0.35, toY(bz) + liftPx, ballR * (1 + by * 0.25), ballR * 0.55, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(0,0,0,${0.32 / (1 + by * 0.7)})`;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(toX(bx) - liftPx * 0.15, toY(bz) - liftPx * 0.55, ballR * (1 + by * 0.05), 0, Math.PI * 2);
+    ctx.fillStyle = "#f4f8fa";
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(toX(bx) - liftPx * 0.15, toY(bz) - liftPx * 0.55, ballR * 0.34, 0, Math.PI * 2);
+    ctx.fillStyle = "#1c2a33";
+    ctx.fill();
+  }
+
+  // ---------- Yandan görünüm ----------
+  function drawSide() {
+    const { ctx, w, h } = fit(sideCanvas);
+    const shot = STATE.data.shots[STATE.index];
+    const path = shot.path;
+    const padL = 34, padR = 10, padT = 12, padB = 22;
+    const isDrop = shot.type === "drop";
+
+    // x ekseni: mesafe (şut) veya zaman (düşme)
+    const maxX = isDrop ? path[path.length - 1][0] : distanceX(path);
+    const maxY = Math.max(2.8, shot.maxHeight * 1.15);
+
+    const plotW = w - padL - padR, plotH = h - padT - padB;
+    const toX = (v) => padL + (v / maxX) * plotW;
+    const toY = (v) => padT + plotH - (v / maxY) * plotH;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Izgara
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.lineWidth = 1;
+    for (let v = 0; v <= maxY; v += 1) {
+      ctx.beginPath(); ctx.moveTo(padL, toY(v)); ctx.lineTo(w - padR, toY(v)); ctx.stroke();
+    }
+
+    // Üst direk + kaleci boyu referansı
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "rgba(255,180,84,0.55)";
+    ctx.beginPath(); ctx.moveTo(padL, toY(CROSSBAR)); ctx.lineTo(w - padR, toY(CROSSBAR)); ctx.stroke();
+    ctx.strokeStyle = "rgba(69,163,255,0.4)";
+    ctx.beginPath(); ctx.moveTo(padL, toY(1.9)); ctx.lineTo(w - padR, toY(1.9)); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Eksen etiketleri
+    ctx.fillStyle = "rgba(143,163,176,0.9)";
+    ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText("2.44 m", padL - 6, toY(CROSSBAR) + 3);
+    ctx.fillText("1.9 m", padL - 6, toY(1.9) + 3);
+    ctx.fillText("0", padL - 6, toY(0) + 3);
+    ctx.textAlign = "left";
+    ctx.fillText(isDrop ? "zaman (s)" : "mesafe (m)", padL, h - 6);
+
+    // Yol
+    const col = colorFor(shot.id);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    path.forEach((p, i) => {
+      const x = isDrop ? p[0] : distanceX(path.slice(0, i + 1));
+      if (i === 0) ctx.moveTo(toX(x), toY(p[1]));
+      else ctx.lineTo(toX(x), toY(p[1]));
+    });
+    ctx.stroke();
+
+    // Geçilen kısım vurgusu
+    const traveled = Math.min(path.length - 1, STATE.time * 60);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(padL, padT, Math.max(0, toX(isDrop ? STATE.time : distanceX(path.slice(0, Math.floor(traveled) + 1))) - padL), plotH);
+    ctx.clip();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    path.forEach((p, i) => {
+      const x = isDrop ? p[0] : distanceX(path.slice(0, i + 1));
+      if (i === 0) ctx.moveTo(toX(x), toY(p[1]));
+      else ctx.lineTo(toX(x), toY(p[1]));
+    });
+    ctx.stroke();
+    ctx.restore();
+
+    // Top noktası
+    const idx = Math.min(path.length - 1, Math.max(0, STATE.time * 60));
+    const i0 = Math.floor(idx), i1 = Math.min(path.length - 1, i0 + 1), f = idx - i0;
+    const p0 = path[i0], p1 = path[i1];
+    const bxv = isDrop ? p0[0] + (p1[0] - p0[0]) * f : distanceX(path.slice(0, i0 + 1));
+    const byv = p0[1] + (p1[1] - p0[1]) * f;
+    ctx.beginPath();
+    ctx.arc(toX(bxv), toY(byv), 4, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+  }
+
+  function distanceX(path) {
+    let d = 0;
+    for (let i = 1; i < path.length; i++) {
+      const dx = path[i][0] - path[i - 1][0], dz = path[i][2] - path[i - 1][2];
+      d += Math.hypot(dx, dz);
+    }
+    return d;
+  }
+
+  // ---------- Metrikler ----------
+  function renderMetrics() {
+    const shot = STATE.data.shots[STATE.index];
+    const items = [
+      { k: "Başlangıç hızı", v: shot.speedStart.toFixed(1), u: "m/s", wide: false },
+      { k: "Bitiş hızı", v: shot.speedEnd.toFixed(1), u: "m/s", wide: false },
+      { k: "Tepe noktası", v: shot.maxHeight.toFixed(2), u: "m", wide: false },
+      { k: "Yanal sapma", v: Math.abs(shot.curve).toFixed(2), u: "m", wide: false },
+      { k: "Süre", v: shot.time.toFixed(2), u: "s", wide: false },
+      { k: "Zemin teması", v: String(shot.bounces), u: "kez", wide: false },
+      { k: "Direk çarpması", v: String(shot.postHits || 0), u: "kez", wide: false },
+      { k: "Ağ esnemesi", v: (shot.maxSag || 0).toFixed(2), u: "m", wide: false },
+      {
+        k: "Sonuç",
+        v: shot.goal ? "GOL" : (shot.type === "drop" ? "sekme testi" : "dışarı"),
+        cls: shot.goal ? "goal" : "miss",
+        wide: true,
+      },
+    ];
+    metricsEl.innerHTML = items
+      .map(
+        (m) =>
+          `<div class="metric${m.wide ? " wide" : ""}"><div class="k">${m.k}</div>` +
+          `<div class="v ${m.cls || ""}">${m.v}<small>${m.u || ""}</small></div></div>`
+      )
+      .join("");
+
+    descEl.innerHTML = `<b>${shot.label}</b> — ${shot.desc}`;
+    sideTitleEl.textContent = shot.type === "drop" ? "Yandan görünüm — zaman / yükseklik" : "Yandan görünüm — mesafe / yükseklik";
+  }
+
+  function durationOf(shot) {
+    const n = shot.path.length;
+    return shot.type === "drop" ? shot.path[n - 1][0] : n / 60;
+  }
+
+  function loop(ts) {
+    const now = ts / 1000;
+    if (!STATE.last) STATE.last = now;
+    const dt = Math.min(0.05, now - STATE.last);
+    STATE.last = now;
+    const shot = STATE.data.shots[STATE.index];
+    if (STATE.playing) {
+      STATE.time += dt * 0.85;
+      const dur = durationOf(shot);
+      if (STATE.time > dur + 0.35) STATE.time = 0;
+    }
+    drawPitch();
+    drawSide();
+    requestAnimationFrame(loop);
+  }
+
+  function selectShot(i) {
+    STATE.index = i;
+    STATE.time = 0;
+    document.querySelectorAll(".tab").forEach((el, j) => el.classList.toggle("active", j === i));
+    renderMetrics();
+  }
+
+  function init() {
+    fetch("trace.json")
+      .then((r) => r.json())
+      .then((data) => {
+        STATE.data = data;
+        STATE.data.shots.forEach((shot, i) => {
+          const b = document.createElement("button");
+          b.className = "tab" + (i === 0 ? " active" : "");
+          b.textContent = shot.label;
+          b.onclick = () => selectShot(i);
+          tabsEl.appendChild(b);
+        });
+        renderMetrics();
+        requestAnimationFrame(loop);
+      })
+      .catch((err) => {
+        descEl.textContent = "trace.json yüklenemedi: " + err.message;
+      });
+  }
+
+  window.addEventListener("resize", () => { drawPitch(); drawSide(); });
+  init();
+})();
+</script>
+</body>
+</html>
