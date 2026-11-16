@@ -105,7 +105,7 @@ hint.BorderSizePixel = 0
 hint.TextColor3 = Color3.fromRGB(232, 240, 246)
 hint.Font = Enum.Font.GothamMedium
 hint.TextSize = 15
-hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   R → topu sıfırla"
+hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   V → izleme kipi   |   R → topu sıfırla"
 hint.Parent = gui
 
 local hintCorner = Instance.new("UICorner")
@@ -163,7 +163,7 @@ if stateRemote then
 			"GOL %d  ·  KURTARIŞ %d  ·  ŞUT %d",
 			payload.goals or 0,
 			payload.saves or 0,
-			payload.kicks or 0
+			(payload.kicks or 0) + (payload.shots or 0)
 		)
 		if payload.event == "goal" then
 			scoreLabel.TextColor3 = Color3.fromRGB(120, 255, 160)
@@ -176,6 +176,9 @@ end
 -- ------------------------------------------------------------ şut / nişan
 local charging = false
 local charge = 0
+-- İzleme kipi (V): kamera topun arkasına geçip kaleyi çerçeveler.
+-- Animasyonları (adaptif şut / kaleci dalışı) yakından izlemek için.
+local spectator = false
 
 local function computeAim()
 	local origin = camera.CFrame.Position
@@ -214,6 +217,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		barBack.Visible = true
 	elseif input.KeyCode == Enum.KeyCode.R and resetRemote then
 		resetRemote:FireServer()
+	elseif input.KeyCode == Enum.KeyCode.V then
+		spectator = not spectator
 	end
 end)
 
@@ -246,14 +251,21 @@ local function onFrame(dt)
 	renderPos = renderPos:Lerp(predicted, k)
 	visual.CFrame = CFrame.new(renderPos)
 
-	-- Kamera: karakterin arkasında, kaleye bakacak şekilde
+	-- Kamera: karakterin arkasında (ya da izleme kipinde topun arkasında)
 	if camera then
 		local focus = renderPos
-		if hrp and hrp.Parent then
-			focus = hrp.Position
+		local desiredPos, desiredLook
+		if spectator then
+			-- Top neredeyse oraya yerleş, kaleyi çerçevele
+			desiredPos = focus + Vector3.new(-26, 15, 7)
+			desiredLook = Vector3.new(GOAL_PLANE, 1.2 * S, 0)
+		else
+			if hrp and hrp.Parent then
+				focus = hrp.Position
+			end
+			desiredPos = focus + Vector3.new(-30, 20, 9)
+			desiredLook = focus + Vector3.new(34, -3, 0)
 		end
-		local desiredPos = focus + Vector3.new(-30, 20, 9)
-		local desiredLook = focus + Vector3.new(34, -3, 0)
 		if not camInit then
 			camPos = desiredPos
 			camLook = desiredLook

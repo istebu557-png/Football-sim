@@ -134,6 +134,7 @@ Config.KEEPER = {
 	reachZ = 3.15, -- direklerin içinde kalır
 	restitution = 0.45,
 	reactionTime = 0.12,
+	diveReachBonus = 0.14, -- dalışta gövde yarıçapı artışı (uzanan kollar)
 }
 
 --[[ File (ağ) fiziği: top ağda yavaşlar, esnetir, geri sektirmez ]]
@@ -147,6 +148,14 @@ Config.NET = {
 	sagStiffness = 11.0, -- geri toplama yayı
 	sagDamping = 3.2,
 	sagImpulse = 1.7, -- çarpma hızının esnemeye dönüşümü
+}
+
+--[[ Animasyon: TAMAMEN kodla, sunucuda. Hiçbir yayınlanmış asset yok.
+	Pozlar Anim/Rig (FK) + Anim/KickAnim + Anim/KeeperAnim tarafından üretilir. ]]
+Config.ANIM = {
+	poseHumanoid = true, -- oyuncunun R15 eklemleri sunucudan sürülsün mü (deneysel)
+	strikerEnabled = true, -- prosedürel şutçu NPC'si (sunucu tarafı demo)
+	keeperPoseEnabled = true, -- kaleci iskeleti gerçekten pozlansın mı
 }
 
 Config.MATCH = {

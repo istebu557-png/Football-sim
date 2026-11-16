@@ -1,16 +1,20 @@
 --[[
-	SimLoop — sunucu otoritesi (Adım 3: yarım saha, 1 kaleci, 1 şutçu).
+	SimLoop — sunucu otoritesi (yarım saha, 1 kaleci, 1 şutçu).
 
 	Akış (her Heartbeat):
-	  1) Kaleci AI'sı bir adım atar (topun geleceğini tahmin eder, dalar).
-	  2) Oyuncuların gerçek karakterlerinden top-oyuncu ilişkisi işlenir
-	     (dokunuş, kapatma, gövde çarpması) — BallControl.
-	  3) Gövdeler (oyuncu + kaleci) simülasyona verilir; top 240 Hz'de ilerler,
-	     gövdelere ve direklere çarpar, kaleye girerse FILE takılır (Net).
-	  4) Görseller güncellenir: top, kaleci modeli, esneyen arka ağ.
-	  5) Gol olursa skor/duyuru, ardından santra.
+	  1) Kaleci AI'sı bir adım atar: topun kale düzlemine varacağı noktayı ve
+	     yüksekliğini tahmin eder, dalış hedefini kilitler.
+	  2) Şutçu NPC'si topa yürür, ayak mesafesine gelince topun gerçek konumuna
+	     göre adaptif şut pozisyonu seçer.
+	  3) Oyuncuların top-oyuncu ilişkisi işlenir (dokunuş, kapatma, gövde).
+	  4) Gövdeler simülasyona verilir; top 240 Hz'de ilerler, direklere/gövdelere
+	     çarpar, kaleye girerse FILE takılır (Net).
+	  5) ANİMASYON (tamamen kodla, asset yok): kaleci dalışı, şutçu şutu ve
+	     oyuncunun R15 eklemleri sunucuda FK ile pozlanır.
+	  6) Görseller güncellenir; gol olursa skor + santra.
 
-	Top her zaman sunucuda simüle edilir; istemci yalnızca istek gönderir.
+	Animasyon nedenseldir: şutun topu bıraktığı an, animasyonun TEMAS anıdır
+	(0.24 s). Oyuncu şut tuşuna bastığında top hemen ayrılmaz; savurma tamamlanır.
 ]]
 
 local Players = game:GetService("Players")
@@ -27,15 +31,21 @@ local SceneBuilder = require(Shared.World.SceneBuilder)
 local Net = require(Shared.Physics.Net)
 local BallControl = require(Shared.Player.BallControl)
 local Keeper = require(Shared.Player.Keeper)
+local Striker = require(Shared.Player.Striker)
+local KeeperAnim = require(Shared.Anim.KeeperAnim)
+local KickAnim = require(Shared.Anim.KickAnim)
+local HumanoidPose = require(Shared.Anim.HumanoidPose)
 
 local S = Config.STUDS_PER_METER
 local R = Config.BALL.radius
 local P = Config.PITCH
+local ANIM = Config.ANIM or {}
 
 -- ---------------------------------------------------------------- 1) Sahne
 local scene = SceneBuilder.build({ half = true, goalSide = 1 })
 local ballPart = scene.ball
 local keeperModel = scene.keeper
+local strikerModel = scene.striker
 local backNet = scene.backNet
 local backNetX = scene.backX -- metre
 
@@ -45,6 +55,7 @@ local goalNet = Net.new(Config, scene.goalSide)
 sim.nets[1] = goalNet
 
 local keeper = Keeper.new(Config, scene.goalSide)
+local striker = Striker.new(Config, { side = scene.goalSide, pos = scene.strikerStart })
 local rng = Rng.new(4242)
 
 local controls = {}
@@ -57,7 +68,7 @@ local function getControl(player)
 	return c
 end
 
-local stats = { goals = 0, saves = 0, kicks = 0 }
+local stats = { goals = 0, saves = 0, kicks = 0, shots = 0 }
 
 -- -------------------------------------------------------------- 3) Remotes
 local remotes = ReplicatedStorage:FindFirstChild("Remotes")
@@ -106,12 +117,21 @@ local function resetBall()
 		Vec3.new(0, 0, 0)
 	)
 	goalNet:resetSag()
+	-- Şutçu da başlangıç noktasına döner
+	striker.pos = scene.strikerStart
+	striker.vel = Vec3.new(0, 0, 0)
+	striker.kick = nil
+	striker.kickT = 0
+	striker.cooldown = 0.6
+	striker.walkPhase = 0
 end
 
 resetBall()
 
 -- --------------------------------------------------------------- 5) Şut
+-- Oyuncunun şutu: tuşa basıldığında pozisyon seçilir, top TEMAS anında ayrılır.
 local lastKickAt = {}
+local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 
 kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 	local now = os.clock()
@@ -126,6 +146,9 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 
 	local control = getControl(player)
 	if not control:canKick(sim.ball, state) then
+		return
+	end
+	if pending[player] then
 		return
 	end
 
@@ -144,20 +167,31 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 		return
 	end
 	local lateral = math.tan(errRad) * dist
-	local aim = Vec3.new(P.halfLength, targetY, targetZ + lateral)
+
+	-- Topun oyuncuya göre konumu -> adaptif şut pozisyonu (hangi ayak, vole mi?)
+	local toBall = Vec3.withY(Vec3.sub(sim.ball.pos, state.pos), 0)
+	local forward = Vec3.new(math.cos(state.facing), 0, math.sin(state.facing))
+	local right = Vec3.cross(forward, Vec3.new(0, 1, 0))
+	local kick = KickAnim.new({
+		ballHeight = sim.ball.pos.y,
+		ballLateral = Vec3.dot(toBall, right),
+		ballForward = Vec3.dot(toBall, forward),
+		charge = c,
+	})
 
 	local speed = control:speedForCharge(c)
-	local velocity = Ballistics.solveLaunch(sim.ball.pos, aim, speed, Config.GRAVITY)
-	if not velocity then
-		return
-	end
+	-- Falso: alçak şut topspin, yüksek köşe backspin (Ballistics.shotSpin)
+	local spin = Ballistics.shotSpin(speed, targetY, targetZ)
 
-	-- Topspin: güç arttıkça artar (top fileye girerken "dalan" bir şut)
-	local backspin = (c < 0.2) and 12 or 0 -- çok yavaş vuruşta hafif aşırtma
-	local spin = Vec3.new(0, rng:symmetric(10), -math.min(70, speed * 1.6) + backspin)
-
-	control:kick(sim.ball, state, velocity, spin, sim.time)
-	stats.kicks = stats.kicks + 1
+	pending[player] = {
+		t = 0,
+		kick = kick,
+		speed = speed,
+		aimY = targetY,
+		aimZ = targetZ + lateral,
+		spin = Vec3.add(spin, Vec3.new(0, rng:symmetric(10), 0)),
+		fired = false,
+	}
 end)
 
 resetRemote.OnServerEvent:Connect(function()
@@ -169,12 +203,45 @@ local resetTimer = 0
 local idleTime = 0
 local lastKeeperHits = 0
 
+local keeperAnim = nil
+local keeperAnimT = 0
+local keeperDiveRef = nil
+
+local READY_POSE = KeeperAnim.new({ dz = 0, height = 0.5 }):sample(0.15).pose
+
+-- Kaleci pozu: dalış hedefi değiştiğinde yeni animasyon başlar
+local function keeperPose(dt)
+	if not ANIM.keeperPoseEnabled then
+		return nil
+	end
+	local target = keeper.diveTarget
+	if target and target ~= keeperDiveRef then
+		keeperDiveRef = target
+		keeperAnim = KeeperAnim.new({
+			dz = target.dz,
+			height = target.height,
+			speed = target.speed,
+		})
+		keeperAnimT = 0
+	end
+	if keeperAnim then
+		keeperAnimT = keeperAnimT + dt
+		if keeperAnimT < keeperAnim:duration() then
+			return keeperAnim:sample(keeperAnimT).pose
+		end
+		keeperAnim = nil
+		keeperDiveRef = keeper.diveTarget
+	end
+	return READY_POSE
+end
+
 local function broadcastState(event, extra)
 	if stateRemote then
 		stateRemote:FireAllClients({
 			goals = stats.goals,
 			saves = stats.saves,
 			kicks = stats.kicks,
+			shots = stats.shots,
 			sag = goalNet.sag,
 			event = event,
 			extra = extra,
@@ -193,20 +260,59 @@ RunService.Heartbeat:Connect(function(frameDt)
 	-- 1) Kaleci
 	local keeperBody = keeper:step(sim.ball, frameDt)
 
-	-- 2) Oyuncular: dokunuş / kapatma / gövde
-	for _, player in ipairs(Players:GetPlayers()) do
-		local state = playerState(player)
-		if state then
-			local event = getControl(player):update(sim.ball, state, sim.time)
-			if event == "trap" then
-				-- ilk dokunuş: top yavaşladı
-			elseif event == "touch" then
-				-- top sürme dokunuşu
+	-- 2) Şutçu NPC: yürü -> şut pozisyonu -> TEMAS anında top ayrılır
+	if ANIM.strikerEnabled and strikerModel then
+		local shot = striker:step(frameDt, sim.ball)
+		if shot and shot.type == "shoot" then
+			local velocity = Ballistics.solveLaunch(sim.ball.pos, shot.target, shot.speed, Config.GRAVITY)
+			if velocity then
+				sim.ball.vel = velocity
+				sim.ball.spin = Ballistics.shotSpin(shot.speed, shot.target.y, shot.target.z)
+				sim.ball.mode = "air"
+				stats.shots = stats.shots + 1
 			end
+		end
+		SceneBuilder.updateStrikerModel(strikerModel, striker:pose(), striker.pos, striker.facing, S)
+	end
+
+	-- 3) Oyuncuların şutları: savurma tamamlanınca top ayrılır
+	for player, shot in pairs(pending) do
+		shot.t = shot.t + frameDt
+		if not shot.fired and shot.t >= KickAnim.CONTACT_TIME then
+			shot.fired = true
+			local velocity = Ballistics.solveLaunch(
+				sim.ball.pos,
+				Vec3.new(P.halfLength, shot.aimY, shot.aimZ),
+				shot.speed,
+				Config.GRAVITY
+			)
+			if velocity then
+				getControl(player):kick(sim.ball, nil, velocity, shot.spin, sim.time)
+				stats.kicks = stats.kicks + 1
+			end
+		end
+		-- Sunucu tarafı R15 pozu (deneysel; Config.ANIM.poseHumanoid ile kapanır)
+		local character = player.Character
+		if ANIM.poseHumanoid and character and HumanoidPose.supported(character) then
+			HumanoidPose.apply(character, shot.kick:sample(shot.t).pose)
+		end
+		if shot.t >= shot.kick:duration() then
+			if character and ANIM.poseHumanoid then
+				HumanoidPose.clear(character)
+			end
+			pending[player] = nil
 		end
 	end
 
-	-- 3) Gövdeleri simülasyona ver (240 Hz çarpışma için)
+	-- 4) Oyuncular: dokunuş / kapatma / gövde
+	for _, player in ipairs(Players:GetPlayers()) do
+		local state = playerState(player)
+		if state then
+			getControl(player):update(sim.ball, state, sim.time)
+		end
+	end
+
+	-- 5) Gövdeleri simülasyona ver (240 Hz çarpışma için)
 	local bodies = {}
 	for _, player in ipairs(Players:GetPlayers()) do
 		local state = playerState(player)
@@ -224,14 +330,14 @@ RunService.Heartbeat:Connect(function(frameDt)
 	bodies[#bodies + 1] = keeperBody
 	sim.bodies = bodies
 
-	-- 4) Simülasyon
+	-- 6) Simülasyon (240 Hz sabit adım)
 	sim:update(frameDt)
 
-	-- 5) Görseller
+	-- 7) Görseller + animasyon
 	local bp = sim.ball.pos
 	ballPart.CFrame = CFrame.new(bp.x * S, bp.y * S, bp.z * S)
 
-	SceneBuilder.updateKeeperModel(keeperModel, keeper, S)
+	SceneBuilder.updateKeeperModel(keeperModel, keeperPose(frameDt), keeper.pos, S)
 	backNet.CFrame = CFrame.new((backNetX + goalNet.sag) * S, (P.goalHeight / 2) * S, 0)
 
 	-- Kurtarış sayacı
@@ -241,7 +347,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 	end
 	lastKeeperHits = keeperBody.hits or 0
 
-	-- 6) Gol
+	-- 8) Gol
 	if sim.lastGoal then
 		local goal = sim.lastGoal
 		sim.lastGoal = nil
@@ -251,13 +357,13 @@ RunService.Heartbeat:Connect(function(frameDt)
 		broadcastState("goal", { side = goal.side, speed = sim.ball:speed() })
 		print(string.format(
 			"[MAC] GOL | toplam %d gol, %d kurtaris, %d sut | ag esnemesi %.2f m",
-			stats.goals, stats.saves, stats.kicks, goalNet.sag
+			stats.goals, stats.saves, stats.kicks + stats.shots, goalNet.sag
 		))
 		return
 	end
 
-	-- Top boşta kalırsa demo şutu (sahne canlı kalsın)
-	if sim.ball:speed() < 0.2 and resetTimer <= 0 then
+	-- Şutçu kapalıysa: top boşta kalırsa demo şutu (sahne canlı kalsın)
+	if not ANIM.strikerEnabled and sim.ball:speed() < 0.2 and resetTimer <= 0 then
 		idleTime = idleTime + frameDt
 		if idleTime > 12 then
 			idleTime = 0
@@ -276,10 +382,11 @@ end)
 Players.PlayerRemoving:Connect(function(player)
 	controls[player] = nil
 	lastKickAt[player] = nil
+	pending[player] = nil
 end)
 
 print(string.format(
-	"[FootballSim] Hazir | yarim saha | 1 kaleci | top fizigi %d Hz | %d direk engeli",
+	"[FootballSim] Hazir | yarim saha | 1 kaleci + 1 sutcu (prosedurel iskelet) | top fizigi %d Hz | %d direk engeli",
 	Config.SIM_HZ,
 	#sim.obstacles
 ))

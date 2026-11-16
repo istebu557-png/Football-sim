@@ -58,4 +58,17 @@ function Ballistics.isReachable(from, to, speed, gravity)
 	return Ballistics.solveLaunch(from, to, speed, gravity) ~= nil
 end
 
+--[[ Vuruş spinini nişana göre seç.
+	Alçak sürükleyici şut  -> topspin (top yere doğru dalar)
+	Yüksek köşe şutu       -> backspin (top havada kalır, çabuk düşmez)
+	Böylece "1.90 m'ye nişan alınan top 0.60 m'ye iniyor" sorunu kalkar. ]]
+function Ballistics.shotSpin(speed, aimY, aimZ)
+	local topspin = math.min(70, (speed or 20) * 1.6)
+	local loft = math.max(0, math.min(1, ((aimY or 0.8) - 0.7) / 1.3))
+	local z = -topspin * (1 - loft) + 26 * loft
+	-- Hafif yan falso: köşeye vururken top kaleciden uzağa kıvrılır
+	local side = math.max(-1, math.min(1, (aimZ or 0) / 3.0))
+	return Vec3.new(0, -side * 12, z)
+end
+
 return Ballistics

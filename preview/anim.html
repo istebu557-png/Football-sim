@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Futbol Motoru — Prosedürel Animasyon</title>
+<style>
+  :root {
+    --bg: #080c10;
+    --panel: #111a21;
+    --panel-2: #16212a;
+    --line: #22303b;
+    --text: #e8eef2;
+    --muted: #8fa3b0;
+    --accent: #3ddc84;
+    --accent-2: #45a3ff;
+    --warn: #ffb454;
+    --kit: #f5d13c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(1200px 700px at 15% -10%, #16232c 0%, var(--bg) 62%);
+    color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 16px 22px 12px;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .badges { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    font-size: 11px; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); background: var(--panel);
+  }
+  .badge b { color: var(--accent); font-weight: 600; }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+    gap: 16px; padding: 16px 22px 30px; max-width: 1400px; margin: 0 auto;
+  }
+  @media (max-width: 940px) { main { grid-template-columns: 1fr; } }
+
+  .stage, aside > .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  }
+  .stage { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  canvas { width: 100%; height: auto; display: block; border-radius: 10px; background: #0a1410; }
+
+  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 9px; padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: #2f4351; }
+  button.primary { background: #16301f; border-color: #265c3a; color: #b8ffd4; }
+  button.active { border-color: var(--accent-2); color: #cde9ff; }
+  input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+  .time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 96px; }
+
+  aside { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .card { padding: 14px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+  .scene-list { display: flex; flex-direction: column; gap: 6px; }
+  .scene-btn {
+    text-align: left; display: flex; flex-direction: column; gap: 2px;
+    border-radius: 10px; padding: 8px 10px;
+  }
+  .scene-btn .t { font-size: 13px; }
+  .scene-btn .s { font-size: 11px; color: var(--muted); }
+  .scene-btn.sel { border-color: #2b6b46; background: #14251b; }
+  .desc { color: var(--muted); font-size: 13px; margin: 0; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat .v { font-size: 15px; font-variant-numeric: tabular-nums; }
+  .note { color: var(--muted); font-size: 12px; line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Prosedürel animasyon — adaptif şut &amp; kaleci atlayışı</h1>
+  <span class="sub">Asset yok, Animation instance yok: pozlar sunucuda kodla (FK) hesaplanıyor.</span>
+  <div class="badges">
+    <span class="badge">kaynak: <b>Rig.solve</b></span>
+    <span class="badge">iskelet: <b>18 eklem / 13 kemik</b></span>
+    <span class="badge">çizim: <b>gerçek FK çıktısı</b></span>
+  </div>
+</header>
+
+<main>
+  <section class="stage">
+    <canvas id="cv" width="1000" height="640"></canvas>
+    <div class="controls">
+      <button id="play" class="primary">Duraklat</button>
+      <input id="scrub" type="range" min="0" max="100" value="0" step="1" />
+      <span class="time" id="time">0.00 s</span>
+      <button id="view">Görünüm: <span id="viewName">yandan</span></button>
+    </div>
+    <div class="legend">
+      <span><span class="swatch" style="background:#f5d13c"></span>forma / iskelet</span>
+      <span><span class="swatch" style="background:#e8eef2"></span>top</span>
+      <span><span class="swatch" style="background:#45a3ff"></span>temas anı</span>
+      <span>boşluk: oynat/duraklat · ← →: kare kare</span>
+    </div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h2>Hareketler</h2>
+      <div class="scene-list" id="list"></div>
+    </div>
+    <div class="card">
+      <h2>Açıklama</h2>
+      <p class="desc" id="desc">Yükleniyor…</p>
+      <div class="stats">
+        <div class="stat"><div class="k">süre</div><div class="v" id="sDur">—</div></div>
+        <div class="stat"><div class="k">kare</div><div class="v" id="sFrames">—</div></div>
+        <div class="stat"><div class="k">temas / tür</div><div class="v" id="sKind">—</div></div>
+        <div class="stat"><div class="k">en yüksek el</div><div class="v" id="sHand">—</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Nasıl üretiliyor?</h2>
+      <p class="note">
+        Her karede <b>KickAnim</b> / <b>KeeperAnim</b> bir poz tablosu döndürür:
+        hangi eklem kaç radyan dönmüş. <b>Rig.solve</b> bu pozu ileri kinematikle
+        dünyaya çevirir. Aynı çıktı sunucuda <b>PartRig</b> ile 13 parçaya
+        uygulanıyor; burada <b>aynı</b> sayılar çiziliyor.
+      </p>
+      <p class="note" style="margin-top:8px">
+        Şut: topun yüksekliği (yer / yarım vole / vole), yanı (hangi ayak) ve
+        güç girdi. Kaleci: topun kaleye varacağı nokta ve yükseklik girdi;
+        hareket tipi (blok / dalış / zıplama) buradan seçiliyor.
+      </p>
+    </div>
+  </aside>
+</main>
+
+<script>
+const S = 3.5714;              // stud/metre (Roblox ölçeği)
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const scrub = document.getElementById("scrub");
+const playBtn = document.getElementById("play");
+const timeEl = document.getElementById("time");
+const viewBtn = document.getElementById("view");
+const viewName = document.getElementById("viewName");
+const listEl = document.getElementById("list");
+const descEl = document.getElementById("desc");
+const sDur = document.getElementById("sDur");
+const sFrames = document.getElementById("sFrames");
+const sKind = document.getElementById("sKind");
+const sHand = document.getElementById("sHand");
+
+let data = null;
+let scenes = [];
+let scene = null;
+let sceneIndex = 0;
+let frame = 0;
+let playing = true;
+let lastTs = 0;
+let forceView = null; // null | "side" | "front"
+
+const JOINT = {};
+const HEAD_INDEX = 3;
+
+function setScene(i) {
+  sceneIndex = i;
+  scene = scenes[i];
+  frame = 0;
+  scrub.max = scene.frames.length - 1;
+  scrub.value = 0;
+  descEl.textContent = scene.desc;
+  sDur.textContent = scene.duration.toFixed(2) + " s";
+  sFrames.textContent = String(scene.frames.length);
+  sKind.textContent = scene.kind ? scene.kind : ("temas " + scene.contact.toFixed(2) + " s");
+  sHand.textContent = maxHandHeight(scene).toFixed(2) + " m";
+  [...listEl.children].forEach((b, k) => b.classList.toggle("sel", k === i));
+  updateViewLabel();
+  draw();
+}
+
+function updateViewLabel() {
+  const v = forceView || scene.view;
+  viewName.textContent = v === "front" ? "önden" : "yandan";
+}
+
+function maxHandHeight(sc) {
+  let best = 0;
+  for (const f of sc.frames) {
+    best = Math.max(best, f[JOINT["handL"]][1], f[JOINT["handR"]][1]);
+  }
+  return best;
+}
+
+function project(p) {
+  const v = forceView || scene.view;
+  // p = [x, y, z] metre, rig uzayı (x sağ, y yukarı, z ileri)
+  if (v === "front") return [p[0], p[1]];
+  return [p[2], p[1]];
+}
+
+function bounds(sc) {
+  let minX = 1e9, maxX = -1e9, minY = 0, maxY = 0.6;
+  for (const f of sc.frames) {
+    for (const p of f) {
+      const q = project(p);
+      minX = Math.min(minX, q[0]); maxX = Math.max(maxX, q[0]);
+      minY = Math.min(minY, q[1]); maxY = Math.max(maxY, q[1]);
+    }
+  }
+  const bx = project([sc.ball[0], sc.ball[1], sc.ball[2]]);
+  minX = Math.min(minX, bx[0] - 0.3); maxX = Math.max(maxX, bx[0] + 0.3);
+  minY = Math.min(minY, bx[1] - 0.3); maxY = Math.max(maxY, bx[1] + 0.3);
+  return { minX, maxX, minY, maxY };
+}
+
+function draw() {
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // arka plan: çim + ufuk
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "#0d1b16");
+  g.addColorStop(1, "#0a1410");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  if (!scene) return;
+  const v = forceView || scene.view;
+  const b = bounds(scene);
+  const padX = 70, padTop = 70, padBottom = 80;
+  const spanX = Math.max(0.9, b.maxX - b.minX);
+  const spanY = Math.max(1.2, b.maxY - b.minY);
+  const scale = Math.min((W - padX * 2) / spanX, (H - padTop - padBottom) / spanY);
+  const originX = W / 2;
+  const groundY = H - padBottom;
+
+  function toScreen(q) {
+    const cx = (b.minX + b.maxX) / 2;
+    return [originX + (q[0] - cx) * scale, groundY - (q[1] - 0) * scale];
+  }
+
+  // zemin çizgisi
+  ctx.strokeStyle = "rgba(140,180,160,0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, groundY + 1);
+  ctx.lineTo(W, groundY + 1);
+  ctx.stroke();
+
+  // kare indeksi (oynatırken frame ondalık olabilir)
+  const fi = Math.max(0, Math.min(scene.frames.length - 1, Math.round(frame)));
+
+  // zemin gölgesi: figürün altında
+  const f = scene.frames[fi];
+  const rootP = f[JOINT["root"]];
+  const rootQ = project(rootP);
+  const gx = toScreen(rootQ)[0];
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.beginPath();
+  ctx.ellipse(gx, groundY + 2, 42, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // top
+  const ball = scene.ball;
+  const ballQ = project([ball[0], ball[1], ball[2]]);
+  const bs = toScreen(ballQ);
+  const br = 0.11 * scale;
+  ctx.fillStyle = "#f2f5f8";
+  ctx.beginPath();
+  ctx.arc(bs[0], bs[1], Math.max(4, br), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(20,30,40,0.5)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // temas anı halkası
+  if (scene.contact > 0) {
+    const t = fi / scene.fps;
+    if (t >= scene.contact - 0.06 && t <= scene.contact + 0.12) {
+      const k = (t - (scene.contact - 0.06)) / 0.18;
+      ctx.strokeStyle = "rgba(69,163,255," + (0.9 - 0.6 * k).toFixed(3) + ")";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(bs[0], bs[1], Math.max(8, br) + k * 26, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // kemikler
+  const joints = scene.frames[fi];
+  const pts = joints.map(p => toScreen(project(p)));
+
+  for (const bone of data.bones) {
+    // JSON'daki kemik indeksleri 1 tabanlı (Lua), pts 0 tabanlı
+    const a = bone[0] - 1, bIdx = bone[1] - 1, radius = bone[2];
+    const pa = pts[a], pb = pts[bIdx];
+    const isTorso = radius > 0.12;
+    ctx.strokeStyle = isTorso ? "#f5d13c" : (radius > 0.06 ? "#d9c245" : "#e6d67a");
+    ctx.lineWidth = Math.max(3, radius * 2 * scale);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(pa[0], pa[1]);
+    ctx.lineTo(pb[0], pb[1]);
+    ctx.stroke();
+  }
+
+  // kafa
+  const head = pts[HEAD_INDEX];
+  ctx.fillStyle = "#e9c3a5";
+  ctx.beginPath();
+  ctx.arc(head[0], head[1], Math.max(6, 0.12 * scale), 0, Math.PI * 2);
+  ctx.fill();
+
+  // eldivenler
+  for (const name of ["handL", "handR"]) {
+    const p = pts[JOINT[name]];
+    ctx.fillStyle = "#f7fbff";
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], Math.max(3.5, 0.07 * scale), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // zaman çubuğu + saat
+  const t = fi / scene.fps;
+  timeEl.textContent = t.toFixed(2) + " s";
+  const prog = Math.min(1, t / scene.duration);
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.fillRect(padX, H - 26, W - padX * 2, 4);
+  ctx.fillStyle = "#3ddc84";
+  ctx.fillRect(padX, H - 26, (W - padX * 2) * prog, 4);
+  if (scene.contact > 0) {
+    const cxp = padX + (W - padX * 2) * Math.min(1, scene.contact / scene.duration);
+    ctx.fillStyle = "#45a3ff";
+    ctx.fillRect(cxp - 1.5, H - 30, 3, 12);
+  }
+
+  // ölçek göstergesi (1 m)
+  ctx.strokeStyle = "rgba(232,238,242,0.5)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(W - 130, H - 54);
+  ctx.lineTo(W - 130 + scale, H - 54);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(232,238,242,0.65)";
+  ctx.font = "12px ui-sans-serif, system-ui";
+  ctx.fillText("1 m", W - 130, H - 60);
+  ctx.fillText(v === "front" ? "önden görünüm (yanal eksen = x)" : "yandan görünüm (ileri eksen = z)", padX, 34);
+}
+
+function tick(ts) {
+  if (playing && scene) {
+    if (!lastTs) lastTs = ts;
+    const dt = (ts - lastTs) / 1000;
+    lastTs = ts;
+    frame += dt * scene.fps;
+    const n = scene.frames.length;
+    if (frame >= n) {
+      frame = 0; // döngü
+    }
+    scrub.value = String(Math.floor(frame));
+    draw();
+  } else {
+    lastTs = ts;
+  }
+  requestAnimationFrame(tick);
+}
+
+
+
+// --- etkileşim
+playBtn.addEventListener("click", () => {
+  playing = !playing;
+  playBtn.textContent = playing ? "Duraklat" : "Oynat";
+  playBtn.classList.toggle("primary", !playing);
+});
+scrub.addEventListener("input", () => {
+  playing = false;
+  playBtn.textContent = "Oynat";
+  frame = Number(scrub.value);
+  draw();
+});
+viewBtn.addEventListener("click", () => {
+  const cur = forceView || scene.view;
+  forceView = cur === "side" ? "front" : "side";
+  updateViewLabel();
+  draw();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space") { e.preventDefault(); playBtn.click(); }
+  if (e.code === "ArrowRight") { playing = false; playBtn.textContent = "Oynat"; frame = Math.min(scene.frames.length - 1, frame + 1); scrub.value = String(Math.floor(frame)); draw(); }
+  if (e.code === "ArrowLeft") { playing = false; playBtn.textContent = "Oynat"; frame = Math.max(0, frame - 1); scrub.value = String(Math.floor(frame)); draw(); }
+});
+
+// --- yükleme
+fetch("anim.json")
+  .then(r => r.json())
+  .then(json => {
+    data = json;
+    json.joints.forEach((name, i) => { JOINT[name] = i; });
+    scenes = json.scenes;
+    scenes.forEach((sc, i) => {
+      const btn = document.createElement("button");
+      btn.className = "scene-btn";
+      btn.innerHTML = '<span class="t">' + sc.label + "</span><span class=\"s\">" +
+        (sc.view === "front" ? "kaleci" : "şut") + " · " + sc.duration.toFixed(2) + " s</span>";
+      btn.addEventListener("click", () => setScene(i));
+      listEl.appendChild(btn);
+    });
+    setScene(0);
+    requestAnimationFrame(tick);
+  })
+  .catch(err => {
+    descEl.textContent = "anim.json yüklenemedi: " + err.message + " — önce `npm run anim` çalıştır.";
+    console.error(err);
+  });
+
+// zaman etiketi draw() içinde güncelleniyor
+</script>
+</body>
+</html>

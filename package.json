@@ -8,9 +8,10 @@
     "test": "node tools/runner.js",
     "trace": "node tools/runner.js --trace",
     "preview": "node tools/serve.js",
-    "install:build": "node tools/installer_lib.js"
+    "install:build": "node tools/installer_lib.js",
+    "anim": "node tools/runner.js --anim"
   },
   "devDependencies": {
-    "fengari-node-cli": "^2.4.1"
+    "fengari-node-cli": "^0.1.0"
   }
 }

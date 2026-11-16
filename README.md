@@ -3,6 +3,8 @@
 Roblox için **gerçekçi** bir futbol motoru, adım adım inşa ediliyor.
 **Adım 1** (top fiziği), **Adım 2** (sahne + tek kurulum) ve
 **Adım 3** (oyuncu–top ve top–file ilişkisi) tamam.
+**Adım 8 (sunum): kodla animasyon** — şut ve kaleci pozları sunucuda hesaplanıyor,
+herhangi bir yayınlanmış Asset / Animation instance yok.
 
 > Luau · Rojo uyumlu · Fizik: kendi deterministik entegratörümüz (240 Hz)
 > **Şu anki kapsam:** yarım saha, 1 kale, 1 kaleci, 1 şutçu (11v11 sonra).
@@ -172,6 +174,35 @@ Senaryolar: düz şut (drag), falso (2.89 m bükülme), çip, **direk çarpışm
 **file (ağda sönümleme + 0.38 m esneme)**, zemin sekmesi. Her nokta 240 Hz
 simülasyonun kaydıdır; `preview/` bir oyun değil doğrulama aracıdır.
 
+## Animasyon — kodla, adaptif, yayınlanmasın
+
+Önemli karar: **yayınlanmış bir Asset yok, `Animation` instance yok, hareketlere "animasyon" diye isim verilmedi.** Pozlar sunucuda kodla hesaplanır ve `PartRig` (13 parçalı R15 eşlemesi) ile doğru şekilde parçalara uygulanır (ileri kinematik, FK).
+
+| Dosya | Sorumluluk |
+|---|---|
+| `src/shared/Anim/Rig.luau` | FK: 18 eklem → 13 parçalı dünya konumu |
+| `src/shared/Anim/KickAnim.luau` | Şut pozları: top yüksekliği/yanı/gücüne göre ayak seçimi, kalça bükülmesi, gövde egimi |
+| `src/shared/Anim/KeeperAnim.luau` | Kaleci: blok / dalış / zıplama / zıplamalı dalış seçimi; el uzanma |
+| `src/shared/Anim/PartRig.luau` | Pozu Roblox parçalarına uygulama (FK) |
+| `src/shared/Anim/Ease.luau` · `Pose.luau` · `HumanoidPose.luau` | Eğri/poz yardımcıları |
+
+Özellikler:
+
+- **Adaptif şut**: `ballHeight` → yerden / yarım vole / vole / sol ayak; `charge` → şut gücü ve kalça bükülmesi; temas anında top ayrılır (`KickAnim.CONTACT_TIME = 0.24 s`, `DURATION = 0.62 s`).
+- **Adaptif kaleci**: topun kaleye varış noktası (`dz`) ve yüksekliği hareketi seçer — blok (`dz < 0.5`) / dalış (`dz ≥ 0.5`) / zıplama (`height ≥ 1.45`); yüksek+yan şutta `jumpDive`. El uzanma `0.38–2.30 m`.
+- **Deterministik**: aynı giriş → aynı poz; `t = 0` başlangıç, `t = DURATION` bitiş.
+
+Tarayıcı izleyici (sadece geliştirme, oyun dışı):
+
+```bash
+npm run anim   # tools/anim_trace.luau → preview/anim.json (FK, 40 Hz, 10 senaryo)
+npm run preview # http://localhost:8080/anim.html
+```
+
+`preview/anim.html` canvas ile yandan/önden görünüm, oynat/duraklat, zaman çubuğu, temas anı işareti, kemik çizimi ve top işareti sunar. Kaynak: `tools/anim_trace.luau` (5 şut + 5 kaleci sahnesi, `contact` ve `bayrak` alanları ile).
+
+Test: `tools/spec.luau` → **88/88** (8. grup kaleci, 9. grup anim, 10. grup canlı döngü + şutçu).
+
 ### Rojo ile (alternatif)
 
 ```bash
@@ -193,6 +224,7 @@ rojo build -o FootballSim.rbxlx
 - [ ] **Adım 6** — 11v11: diziliş, takım AI'sı, baskı, ofansif/defansif geçiş.
 - [ ] **Adım 7** — Ağ: istemci tahmini, gecikme telafisi, bant bütçesi.
 - [ ] **Adım 8** — Sunum: animasyonlar, kamera modları, UI, ses.
+      *Animasyon alt-adımı (şut + kaleci): kodla, FK, testli (88/88). Kamera modları (V izleme), UI, ses bekliyor.*
 
 ---
 
@@ -207,3 +239,5 @@ rojo build -o FootballSim.rbxlx
 - **Saha dışına çıkan oyuncu düşebilir** (sadece çim katmanı var).
 - **Drag crisis yumuşak geçişle yaklaşımlanır**; gerçek Knuckleball histerezis
   gösterir.
+- **Animasyon sadece şut ve kaleci** (tek bir şutçu, tek bir kaleci); koşma/
+  geçiş akışı yok. Kamera modu (V izleme) ve UI istemci tarafındadır.
