@@ -93,64 +93,69 @@ function KickAnim:sample(t)
 	local contact = t >= KickAnim.CONTACT_TIME
 
 	-- Yüksek topta bacak daha yukarı çıkar (negatif hip = öne)
-	-- Yüksek top: kalça 2.2 rad'e kadar bükülür (gerçek bir yüksek vole sınırı)
-	local swingHigh = 0.55 + 1.20 * tall
-	local backAngle = 0.85 * amp
+	-- Yüksek top: kalça daha çok bükülür, savurma düzlemi yükselir
+	local swingHigh = 0.55 + 1.35 * tall
+	local backAngle = 0.90 * amp
 	local contactAngle = -(swingHigh * amp)
-	local followAngle = -((swingHigh + 0.45) * amp)
+	local followAngle = -((swingHigh + 0.50) * amp)
 
+	-- Hip: daha yumuşak hazırlık, sert savurma, geniş takip
 	local hipX = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.13, v = backAngle },
-		{ t = 0.24, v = contactAngle },
-		{ t = 0.40, v = followAngle },
+		{ t = 0.10, v = backAngle * 0.6 }, -- erken hafif geri
+		{ t = 0.16, v = backAngle },       -- tam geri (maksimum gevşeme)
+		{ t = 0.24, v = contactAngle },    -- temas: kalça önde, bacak uzanır
+		{ t = 0.38, v = followAngle },     -- takip: bacak yukarıda
 		{ t = 0.62, v = 0 },
 	})
 
 	local kneeX = Ease.track(t, {
 		{ t = 0.00, v = 0.08 },
-		{ t = 0.13, v = 1.20 * amp },
-		{ t = 0.24, v = 0.12 + 0.10 * tall },
-		{ t = 0.40, v = 0.55 },
+		{ t = 0.13, v = 1.30 * amp },      -- güçlü diz kırılma
+		{ t = 0.24, v = 0.10 + 0.12 * tall }, -- temas anında düz
+		{ t = 0.40, v = 0.65 },            -- takip: diz yüksek
 		{ t = 0.62, v = 0.08 },
 	})
 
-	-- Temas anında ayak bileği gergin (iç üstü / file)
+	-- Temas anında ayak bileği: yüksek topta daha düz, alçakta iç üstü
+	local ankleContact = 0.35 + 0.15 * tall
 	local ankleX = Ease.track(t, {
 		{ t = 0.00, v = 0.10 },
-		{ t = 0.13, v = -0.25 },
-		{ t = 0.24, v = 0.35 },
+		{ t = 0.13, v = -0.30 },
+		{ t = 0.24, v = ankleContact },
 		{ t = 0.40, v = 0.10 },
 		{ t = 0.62, v = 0.10 },
 	})
 
-	-- Destek bacağı: yüksek topta daha çok kırılır, gövde dengelenir
-	local supportHip = -(0.10 + 0.22 * tall)
-	local supportKnee = 0.18 + 0.38 * tall + 0.15 * math.abs(reach)
+	-- Destek bacağı: yüksek topta daha çok kırılır, ağırlık merkezi alçak
+	local supportHip = -(0.12 + 0.28 * tall)
+	local supportKnee = 0.20 + 0.42 * tall + 0.18 * math.abs(reach)
 
-	-- Gövde: savurmada ters döner, temasta döner; yüksek topta geriye yatar
+	-- Gövde: savurmada ters, temasta öne, yüksek topta güçlü geriye
 	local spineY = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.13, v = 0.34 * amp },
-		{ t = 0.24, v = -0.30 * amp },
-		{ t = 0.40, v = -0.42 * amp },
+		{ t = 0.13, v = 0.38 * amp },
+		{ t = 0.24, v = -0.34 * amp },
+		{ t = 0.40, v = -0.48 * amp },
 		{ t = 0.62, v = 0 },
 	})
-	local spineX = 0.10 + 0.42 * tall -- yüksek top: gövde geriye
-	local spineZ = -0.22 * reach
+	local spineX = 0.12 + 0.50 * tall -- yüksek top: daha çok geriye
+	local spineZ = -0.25 * reach
 
+	-- Kollar: karşı kol daha çok açılır (denge), vuran kol daha sığ
 	local shoulderSwing = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.13, v = -0.45 },
-		{ t = 0.24, v = 0.55 },
-		{ t = 0.40, v = 0.70 },
+		{ t = 0.13, v = -0.50 },
+		{ t = 0.24, v = 0.60 },
+		{ t = 0.40, v = 0.75 },
 		{ t = 0.62, v = 0 },
 	})
 
+	-- Gövde salınımı: temas anında hafif Titreşim (realistik)
 	local bob = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.13, v = -0.045 },
-		{ t = 0.28, v = -0.015 },
+		{ t = 0.13, v = -0.050 },
+		{ t = 0.28, v = -0.020 },
 		{ t = 0.62, v = 0 },
 	})
 
@@ -159,28 +164,28 @@ function KickAnim:sample(t)
 
 	-- Gövde ve baş
 	pose.spine = Pose.joint(spineX, spineY, spineZ)
-	pose.neck = Pose.joint(0.12 + 0.10 * (1 - tall), -spineY * 0.5, 0)
-	pose.head = Pose.joint(0.05, 0, 0)
+	pose.neck = Pose.joint(0.12 + 0.12 * (1 - tall), -spineY * 0.5, 0)
+	pose.head = Pose.joint(0.06, 0, 0)
 
-	-- Vuran bacak
+	-- Vuran bacak: daha geniş kalça açısı, topa göre hizalı
 	local kickHip = pose["hip" .. self.foot]
-	kickHip = Pose.joint(hipX, 0.12 * self.reach, (self.foot == "R" and -1 or 1) * 0.22 * math.abs(reach))
+	kickHip = Pose.joint(hipX, 0.14 * self.reach, (self.foot == "R" and -1 or 1) * 0.25 * math.abs(reach))
 	pose["hip" .. self.foot] = kickHip
 	pose["knee" .. self.foot] = Pose.joint(kneeX, 0, 0)
 	pose["ankle" .. self.foot] = Pose.joint(ankleX, 0, 0)
 
-	-- Destek bacağı (top yoksa da ağırlık merkezi desteklenir)
+	-- Destek bacağı: ağırlık merkezi dengeleme
 	pose["hip" .. self.otherFoot] = Pose.joint(supportHip, 0, 0)
 	pose["knee" .. self.otherFoot] = Pose.joint(supportKnee, 0, 0)
-	pose["ankle" .. self.otherFoot] = Pose.joint(-0.12 - 0.2 * tall, 0, 0)
+	pose["ankle" .. self.otherFoot] = Pose.joint(-0.14 - 0.25 * tall, 0, 0)
 
-	-- Kollar: karşı kol denge için açılır
+	-- Kollar: karşı kol güçlü denge, vuran kol sığ takip
 	local otherArm = (self.foot == "R") and "L" or "R"
 	local kickArm = (self.foot == "R") and "R" or "L"
-	pose["shoulder" .. otherArm] = Pose.joint(-0.25 + shoulderSwing, 0.15, 0.55 + 0.25 * tall)
-	pose["elbow" .. otherArm] = Pose.joint(-0.35 - 0.2 * math.abs(shoulderSwing), 0, 0)
-	pose["shoulder" .. kickArm] = Pose.joint(0.30 - shoulderSwing * 0.7, 0, -0.30)
-	pose["elbow" .. kickArm] = Pose.joint(-0.45, 0, 0)
+	pose["shoulder" .. otherArm] = Pose.joint(-0.28 + shoulderSwing, 0.18, 0.60 + 0.30 * tall)
+	pose["elbow" .. otherArm] = Pose.joint(-0.40 - 0.25 * math.abs(shoulderSwing), 0, 0)
+	pose["shoulder" .. kickArm] = Pose.joint(0.35 - shoulderSwing * 0.75, 0, -0.32)
+	pose["elbow" .. kickArm] = Pose.joint(-0.50, 0, 0)
 
 	return { pose = pose, contact = contact }
 end
