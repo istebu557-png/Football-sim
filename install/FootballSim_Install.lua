@@ -953,8 +953,9 @@ function KeeperAnim.new(opts)
 		kind = "dive"
 	end
 
-	-- Uzanma: ne kadar uzağa gidecekse o kadar uzanır (0.35-1.0 m)
-	local reach = math.max(0.35, math.min(1.0, absDz / 1.15))
+	-- Uzanma: ne kadar uzağa gidecekse o kadar uzanır (0.30-1.0 m)
+	-- Yüksek topda daha az yana uzanır (el yerine göz/topu takip eder)
+	local reach = math.max(0.30, math.min(1.0, absDz / 1.15))
 	-- Hızlı topa daha sert/çabuk tepki
 	local urgency = clamp01((speed - 10) / 20)
 
@@ -973,13 +974,14 @@ function KeeperAnim:duration()
 	return KeeperAnim.DURATION
 end
 
--- Uzanma eğrisi: hazırlıktan zirveye, sonra toparlanma
+-- Uzanma eğrisi: daha yumuşak hazırlık, sert uzanma, yavaş toparlanma
 local function extensionAt(t)
 	return Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.10, v = -0.12 },
-		{ t = 0.35, v = 1 },
-		{ t = 0.62, v = 1 },
+		{ t = 0.08, v = -0.10 }, -- erken hafif çökme
+		{ t = 0.16, v = 0.45 },  -- hızlı fırlama
+		{ t = 0.38, v = 1 },     -- zirve
+		{ t = 0.68, v = 0.75 },  -- hafif geri çekilme
 		{ t = 0.95, v = 0 },
 	})
 end
@@ -991,11 +993,11 @@ function KeeperAnim:sample(t)
 	local dir = self.dir
 	local reach = self.reach
 
-	-- Hazırlık: çömelme
+	-- Hazırlık: daha belirgin çömelme (enerji toplanışı)
 	local crouch = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.10, v = 0.10 },
-		{ t = 0.35, v = 0.04 },
+		{ t = 0.10, v = 0.14 },
+		{ t = 0.25, v = 0.08 },
 		{ t = 0.95, v = 0 },
 	})
 
@@ -1003,45 +1005,45 @@ function KeeperAnim:sample(t)
 		-- Ayakta blok: dizler kırık, kollar öne, ağırlık merkezi alçak
 		local guard = Ease.track(t, {
 			{ t = 0.00, v = 0 },
-			{ t = 0.16, v = 1 },
-			{ t = 0.70, v = 1 },
+			{ t = 0.14, v = 1 },
+			{ t = 0.68, v = 1 },
 			{ t = 0.95, v = 0 },
 		})
-		pose.rootOffset = Vec3.new(0, -0.16 * guard - 0.05 * crouch, 0)
-		pose.spine = Pose.joint(0.18 * guard, -dir * 0.12 * guard, 0)
-		pose.hipL = Pose.joint(-0.42 * guard, 0, -0.10 * guard)
-		pose.hipR = Pose.joint(-0.42 * guard, 0, 0.10 * guard)
-		pose.kneeL = Pose.joint(0.85 * guard, 0, 0)
-		pose.kneeR = Pose.joint(0.85 * guard, 0, 0)
-		pose.shoulderL = Pose.joint(-1.15 * guard, 0, -0.35 * guard)
-		pose.shoulderR = Pose.joint(-1.15 * guard, 0, 0.35 * guard)
-		pose.elbowL = Pose.joint(-0.45 * guard, 0, 0)
-		pose.elbowR = Pose.joint(-0.45 * guard, 0, 0)
-		pose.neck = Pose.joint(-0.10 * guard, 0, 0)
+		pose.rootOffset = Vec3.new(0, -0.18 * guard - 0.06 * crouch, 0)
+		pose.spine = Pose.joint(0.20 * guard, -dir * 0.14 * guard, 0)
+		pose.hipL = Pose.joint(-0.45 * guard, 0, -0.12 * guard)
+		pose.hipR = Pose.joint(-0.45 * guard, 0, 0.12 * guard)
+		pose.kneeL = Pose.joint(0.90 * guard, 0, 0)
+		pose.kneeR = Pose.joint(0.90 * guard, 0, 0)
+		pose.shoulderL = Pose.joint(-1.20 * guard, 0, -0.40 * guard)
+		pose.shoulderR = Pose.joint(-1.20 * guard, 0, 0.40 * guard)
+		pose.elbowL = Pose.joint(-0.50 * guard, 0, 0)
+		pose.elbowR = Pose.joint(-0.50 * guard, 0, 0)
+		pose.neck = Pose.joint(-0.12 * guard, 0, 0)
 		return { pose = pose }
 	end
 
 	if kind == "jump" then
-		-- Yüksek top: zıpla, kollar yukarı
+		-- Yüksek top: güçlü zıpla, kollar düz yukarı, bacaklar toplanır
 		local air = Ease.track(t, {
 			{ t = 0.00, v = 0 },
-			{ t = 0.10, v = -0.12 },
-			{ t = 0.35, v = 0.52 },
-			{ t = 0.62, v = 0.40 },
+			{ t = 0.08, v = -0.10 },
+			{ t = 0.30, v = 0.60 },
+			{ t = 0.55, v = 0.45 },
 			{ t = 0.95, v = 0 },
 		})
 		pose.rootOffset = Vec3.new(0, air, 0)
-		pose.spine = Pose.joint(0.10, 0, 0)
-		pose.hipL = Pose.joint(-0.55 * ext, 0, -0.08)
-		pose.hipR = Pose.joint(-0.55 * ext, 0, 0.08)
-		pose.kneeL = Pose.joint(1.00 * math.abs(ext), 0, 0)
-		pose.kneeR = Pose.joint(1.00 * math.abs(ext), 0, 0)
-		-- Kollar yukarı (negatif shoulder.x kolu yukarı kaldırır)
-		pose.shoulderL = Pose.joint(-2.45 * ext, 0, -0.25)
-		pose.shoulderR = Pose.joint(-2.45 * ext, 0, 0.25)
-		pose.elbowL = Pose.joint(-0.25, 0, 0)
-		pose.elbowR = Pose.joint(-0.25, 0, 0)
-		pose.neck = Pose.joint(-0.25 * ext, 0, 0)
+		pose.spine = Pose.joint(0.12, 0, 0)
+		pose.hipL = Pose.joint(-0.60 * ext, 0, -0.10)
+		pose.hipR = Pose.joint(-0.60 * ext, 0, 0.10)
+		pose.kneeL = Pose.joint(1.10 * math.abs(ext), 0, 0)
+		pose.kneeR = Pose.joint(1.10 * math.abs(ext), 0, 0)
+		-- Kollar düz yukarı (negatif shoulder.x)
+		pose.shoulderL = Pose.joint(-2.60 * ext, 0, -0.20)
+		pose.shoulderR = Pose.joint(-2.60 * ext, 0, 0.20)
+		pose.elbowL = Pose.joint(-0.20, 0, 0)
+		pose.elbowR = Pose.joint(-0.20, 0, 0)
+		pose.neck = Pose.joint(-0.30 * ext, 0, 0)
 		return { pose = pose }
 	end
 
@@ -1050,41 +1052,40 @@ function KeeperAnim:sample(t)
 	local lateral = dir * reach * ext
 	local vertical
 	if isJump then
+		-- Zıplamalı dalış: daha yüksek, daha geniş uzanma
 		vertical = math.max(0, Ease.track(t, {
 			{ t = 0.00, v = 0 },
-			{ t = 0.10, v = -0.10 },
-			{ t = 0.35, v = 0.46 },
-			{ t = 0.62, v = 0.30 },
+			{ t = 0.08, v = -0.08 },
+			{ t = 0.30, v = 0.52 },
+			{ t = 0.55, v = 0.35 },
 			{ t = 0.95, v = 0 },
 		}))
 	else
-		-- Alçak/düz dalışta gövde yere yaklaşır
-		vertical = -0.30 * math.max(0, ext)
+		-- Alçak/düz dalış: gövde daha çok yere doğru
+		vertical = -0.35 * math.max(0, ext)
 	end
 
-	pose.rootOffset = Vec3.new(lateral, vertical - 0.08 * crouch, 0)
+	pose.rootOffset = Vec3.new(lateral, vertical - 0.10 * crouch, 0)
 
-	-- Gövde yana devrilir (yerel Z ekseni = ileri; roll)
-	pose.root = Pose.joint(0, 0, -dir * (isJump and 0.55 or 1.05) * math.max(0, ext))
-	pose.spine = Pose.joint(0.12, -dir * 0.25 * ext, -dir * 0.20 * ext)
-	pose.neck = Pose.joint(-0.18 * ext, dir * 0.35 * ext, 0)
+	-- Gövde daha çok devrilir (daha geniş dalış görünümü)
+	pose.root = Pose.joint(0, 0, -dir * (isJump and 0.65 or 1.15) * math.max(0, ext))
+	pose.spine = Pose.joint(0.14, -dir * 0.30 * ext, -dir * 0.25 * ext)
+	pose.neck = Pose.joint(-0.20 * ext, dir * 0.40 * ext, 0)
 
-	-- Kollar topa doğru yana uzanır. Kol -Y'den başlar; Z ekseni abduksiyon
-	-- (yana açma) eksenidir. |z| = 1.9 -> kol yatayın biraz üstünde yana uzar.
-	-- Top yükseldikçe kollar daha yukarı uzanır (yüksek topta parmak ucu)
-	local aimUp = clamp01((self.height - 1.0) / 0.8)
-	-- Yüksek top: kollar neredeyse dümdüz yukarı (parmak ucu), alçak top: yana yatay
-	local armUp = (isJump and 2.15 or 1.93) + 0.85 * aimUp
-	pose.shoulderL = Pose.joint(-0.40 * ext, 0, dir * (armUp + 0.10) * ext)
-	pose.shoulderR = Pose.joint(-0.40 * ext, 0, dir * (armUp + 0.10) * ext)
-	pose.elbowL = Pose.joint(-0.18 * ext, 0, 0)
-	pose.elbowR = Pose.joint(-0.10 * ext, 0, 0)
+	-- Kollar: top yüksekliğine göre daha hassas
+	-- Alçak top: yana yatay. Yüksek top: neredeyse düz yukarı.
+	local aimUp = clamp01((self.height - 0.9) / 1.0)
+	local armUp = (isJump and 2.30 or 2.05) + 0.95 * aimUp
+	pose.shoulderL = Pose.joint(-0.45 * ext, 0, dir * (armUp + 0.12) * ext)
+	pose.shoulderR = Pose.joint(-0.45 * ext, 0, dir * (armUp + 0.12) * ext)
+	pose.elbowL = Pose.joint(-0.20 * ext, 0, 0)
+	pose.elbowR = Pose.joint(-0.12 * ext, 0, 0)
 
-	-- Bacaklar: dalış yönünün tersine uzanır (denge)
-	pose.hipL = Pose.joint(-0.25 * ext, 0, -dir * 0.30 * ext)
-	pose.hipR = Pose.joint(-0.45 * ext, 0, -dir * 0.15 * ext)
-	pose.kneeL = Pose.joint(0.65 * ext, 0, 0)
-	pose.kneeR = Pose.joint(0.35 * ext, 0, 0)
+	-- Bacaklar: dalış yönünün tersine daha çok uzanır (denge)
+	pose.hipL = Pose.joint(-0.30 * ext, 0, -dir * 0.35 * ext)
+	pose.hipR = Pose.joint(-0.50 * ext, 0, -dir * 0.18 * ext)
+	pose.kneeL = Pose.joint(0.70 * ext, 0, 0)
+	pose.kneeR = Pose.joint(0.40 * ext, 0, 0)
 
 	return { pose = pose }
 end
@@ -1187,64 +1188,69 @@ function KickAnim:sample(t)
 	local contact = t >= KickAnim.CONTACT_TIME
 
 	-- Yüksek topta bacak daha yukarı çıkar (negatif hip = öne)
-	-- Yüksek top: kalça 2.2 rad'e kadar bükülür (gerçek bir yüksek vole sınırı)
-	local swingHigh = 0.55 + 1.20 * tall
-	local backAngle = 0.85 * amp
+	-- Yüksek top: kalça daha çok bükülür, savurma düzlemi yükselir
+	local swingHigh = 0.55 + 1.35 * tall
+	local backAngle = 0.90 * amp
 	local contactAngle = -(swingHigh * amp)
-	local followAngle = -((swingHigh + 0.45) * amp)
+	local followAngle = -((swingHigh + 0.50) * amp)
 
+	-- Hip: daha yumuşak hazırlık, sert savurma, geniş takip
 	local hipX = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.13, v = backAngle },
-		{ t = 0.24, v = contactAngle },
-		{ t = 0.40, v = followAngle },
+		{ t = 0.10, v = backAngle * 0.6 }, -- erken hafif geri
+		{ t = 0.16, v = backAngle },       -- tam geri (maksimum gevşeme)
+		{ t = 0.24, v = contactAngle },    -- temas: kalça önde, bacak uzanır
+		{ t = 0.38, v = followAngle },     -- takip: bacak yukarıda
 		{ t = 0.62, v = 0 },
 	})
 
 	local kneeX = Ease.track(t, {
 		{ t = 0.00, v = 0.08 },
-		{ t = 0.13, v = 1.20 * amp },
-		{ t = 0.24, v = 0.12 + 0.10 * tall },
-		{ t = 0.40, v = 0.55 },
+		{ t = 0.13, v = 1.30 * amp },      -- güçlü diz kırılma
+		{ t = 0.24, v = 0.10 + 0.12 * tall }, -- temas anında düz
+		{ t = 0.40, v = 0.65 },            -- takip: diz yüksek
 		{ t = 0.62, v = 0.08 },
 	})
 
-	-- Temas anında ayak bileği gergin (iç üstü / file)
+	-- Temas anında ayak bileği: yüksek topta daha düz, alçakta iç üstü
+	local ankleContact = 0.35 + 0.15 * tall
 	local ankleX = Ease.track(t, {
 		{ t = 0.00, v = 0.10 },
-		{ t = 0.13, v = -0.25 },
-		{ t = 0.24, v = 0.35 },
+		{ t = 0.13, v = -0.30 },
+		{ t = 0.24, v = ankleContact },
 		{ t = 0.40, v = 0.10 },
 		{ t = 0.62, v = 0.10 },
 	})
 
-	-- Destek bacağı: yüksek topta daha çok kırılır, gövde dengelenir
-	local supportHip = -(0.10 + 0.22 * tall)
-	local supportKnee = 0.18 + 0.38 * tall + 0.15 * math.abs(reach)
+	-- Destek bacağı: yüksek topta daha çok kırılır, ağırlık merkezi alçak
+	local supportHip = -(0.12 + 0.28 * tall)
+	local supportKnee = 0.20 + 0.42 * tall + 0.18 * math.abs(reach)
 
-	-- Gövde: savurmada ters döner, temasta döner; yüksek topta geriye yatar
+	-- Gövde: savurmada ters, temasta öne, yüksek topta güçlü geriye
 	local spineY = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.13, v = 0.34 * amp },
-		{ t = 0.24, v = -0.30 * amp },
-		{ t = 0.40, v = -0.42 * amp },
+		{ t = 0.13, v = 0.38 * amp },
+		{ t = 0.24, v = -0.34 * amp },
+		{ t = 0.40, v = -0.48 * amp },
 		{ t = 0.62, v = 0 },
 	})
-	local spineX = 0.10 + 0.42 * tall -- yüksek top: gövde geriye
-	local spineZ = -0.22 * reach
+	local spineX = 0.12 + 0.50 * tall -- yüksek top: daha çok geriye
+	local spineZ = -0.25 * reach
 
+	-- Kollar: karşı kol daha çok açılır (denge), vuran kol daha sığ
 	local shoulderSwing = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.13, v = -0.45 },
-		{ t = 0.24, v = 0.55 },
-		{ t = 0.40, v = 0.70 },
+		{ t = 0.13, v = -0.50 },
+		{ t = 0.24, v = 0.60 },
+		{ t = 0.40, v = 0.75 },
 		{ t = 0.62, v = 0 },
 	})
 
+	-- Gövde salınımı: temas anında hafif Titreşim (realistik)
 	local bob = Ease.track(t, {
 		{ t = 0.00, v = 0 },
-		{ t = 0.13, v = -0.045 },
-		{ t = 0.28, v = -0.015 },
+		{ t = 0.13, v = -0.050 },
+		{ t = 0.28, v = -0.020 },
 		{ t = 0.62, v = 0 },
 	})
 
@@ -1253,28 +1259,28 @@ function KickAnim:sample(t)
 
 	-- Gövde ve baş
 	pose.spine = Pose.joint(spineX, spineY, spineZ)
-	pose.neck = Pose.joint(0.12 + 0.10 * (1 - tall), -spineY * 0.5, 0)
-	pose.head = Pose.joint(0.05, 0, 0)
+	pose.neck = Pose.joint(0.12 + 0.12 * (1 - tall), -spineY * 0.5, 0)
+	pose.head = Pose.joint(0.06, 0, 0)
 
-	-- Vuran bacak
+	-- Vuran bacak: daha geniş kalça açısı, topa göre hizalı
 	local kickHip = pose["hip" .. self.foot]
-	kickHip = Pose.joint(hipX, 0.12 * self.reach, (self.foot == "R" and -1 or 1) * 0.22 * math.abs(reach))
+	kickHip = Pose.joint(hipX, 0.14 * self.reach, (self.foot == "R" and -1 or 1) * 0.25 * math.abs(reach))
 	pose["hip" .. self.foot] = kickHip
 	pose["knee" .. self.foot] = Pose.joint(kneeX, 0, 0)
 	pose["ankle" .. self.foot] = Pose.joint(ankleX, 0, 0)
 
-	-- Destek bacağı (top yoksa da ağırlık merkezi desteklenir)
+	-- Destek bacağı: ağırlık merkezi dengeleme
 	pose["hip" .. self.otherFoot] = Pose.joint(supportHip, 0, 0)
 	pose["knee" .. self.otherFoot] = Pose.joint(supportKnee, 0, 0)
-	pose["ankle" .. self.otherFoot] = Pose.joint(-0.12 - 0.2 * tall, 0, 0)
+	pose["ankle" .. self.otherFoot] = Pose.joint(-0.14 - 0.25 * tall, 0, 0)
 
-	-- Kollar: karşı kol denge için açılır
+	-- Kollar: karşı kol güçlü denge, vuran kol sığ takip
 	local otherArm = (self.foot == "R") and "L" or "R"
 	local kickArm = (self.foot == "R") and "R" or "L"
-	pose["shoulder" .. otherArm] = Pose.joint(-0.25 + shoulderSwing, 0.15, 0.55 + 0.25 * tall)
-	pose["elbow" .. otherArm] = Pose.joint(-0.35 - 0.2 * math.abs(shoulderSwing), 0, 0)
-	pose["shoulder" .. kickArm] = Pose.joint(0.30 - shoulderSwing * 0.7, 0, -0.30)
-	pose["elbow" .. kickArm] = Pose.joint(-0.45, 0, 0)
+	pose["shoulder" .. otherArm] = Pose.joint(-0.28 + shoulderSwing, 0.18, 0.60 + 0.30 * tall)
+	pose["elbow" .. otherArm] = Pose.joint(-0.40 - 0.25 * math.abs(shoulderSwing), 0, 0)
+	pose["shoulder" .. kickArm] = Pose.joint(0.35 - shoulderSwing * 0.75, 0, -0.32)
+	pose["elbow" .. kickArm] = Pose.joint(-0.50, 0, 0)
 
 	return { pose = pose, contact = contact }
 end
@@ -3959,7 +3965,10 @@ function Striker:step(dt, ball, keeper)
 			self.cooldown = Striker.COOLDOWN
 			self.state = "idle"
 		end
-		self.vel = Vec3.new(0, 0, 0)
+		-- Takip sırasında hafif ileri hareket (topu bırakıp durmak yerine gevolg devam eder)
+		local followDir = Vec3.unit(Vec3.withY(Vec3.sub(self.target, self.pos), 0))
+		self.vel = Vec3.scale(followDir, Striker.WALK_SPEED * 0.30)
+		self.pos = Vec3.add(self.pos, Vec3.scale(self.vel, dt))
 		return event
 	end
 
