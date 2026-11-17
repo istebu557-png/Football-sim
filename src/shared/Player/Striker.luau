@@ -157,7 +157,10 @@ function Striker:step(dt, ball, keeper)
 			self.cooldown = Striker.COOLDOWN
 			self.state = "idle"
 		end
-		self.vel = Vec3.new(0, 0, 0)
+		-- Takip sırasında hafif ileri hareket (topu bırakıp durmak yerine gevolg devam eder)
+		local followDir = Vec3.unit(Vec3.withY(Vec3.sub(self.target, self.pos), 0))
+		self.vel = Vec3.scale(followDir, Striker.WALK_SPEED * 0.30)
+		self.pos = Vec3.add(self.pos, Vec3.scale(self.vel, dt))
 		return event
 	end
 
