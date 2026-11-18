@@ -25,6 +25,7 @@
 local Ease = require(script.Parent.Ease)
 local Pose = require(script.Parent.Pose)
 local Vec3 = require(script.Parent.Parent.Core.Vec3)
+local Config = require(script.Parent.Parent.Config)
 
 local KickAnim = {}
 KickAnim.__index = KickAnim
@@ -40,9 +41,12 @@ local clamp01 = Ease.clamp01
 	ballForward : topun önde (+) / arkada (-) olması (m)
 	charge      : 0..1 şut gücü
 	foot        : "L" | "R" (verilmezse topun yanına göre seçilir)
+	shotType    : "place" | "instep" | "drive" | "outside" (verilmezse "instep")
 ]]
 function KickAnim.new(opts)
 	opts = opts or {}
+
+	local SHOT = Config.SHOT
 
 	local charge = clamp01(opts.charge or 0.7)
 	local height = math.max(0, opts.ballHeight or 0.11)
@@ -54,14 +58,20 @@ function KickAnim.new(opts)
 		foot = (lateral >= 0) and "R" or "L"
 	end
 
+	local shotType = opts.shotType or "instep"
+	local sp = SHOT.types and SHOT[shotType] or SHOT.instep
+
 	-- Yüksek top -> vole: savurma düzlemi yükselir
 	local tall = clamp01((height - 0.45) / 1.1)
-	-- Genlik güçle artar
-	local amp = 0.82 + 0.42 * charge
+	-- Genlik: güç + vuruş türü baz çarpanı
+	local amp = (0.82 + 0.42 * charge) * sp.power
 	-- Yana uzanma (kalça abduksiyonu)
 	local reach = math.max(-1, math.min(1, lateral / 0.55))
 	-- Top çok gerideyse daha kısa, daha kontrollü vuruş
 	local behind = math.max(-1, math.min(0, forward / 0.6))
+
+	-- Elle seçilen mi? (otomatikse topun yanına göre ayak seçilmiş olur)
+	local manualFoot = opts.foot ~= nil
 
 	return setmetatable({
 		charge = charge,
@@ -70,6 +80,9 @@ function KickAnim.new(opts)
 		forward = forward,
 		foot = foot,
 		otherFoot = foot == "R" and "L" or "R",
+		shotType = shotType,
+		sp = sp,
+		manualFoot = manualFoot,
 		tall = tall,
 		amp = amp,
 		reach = reach,
@@ -91,13 +104,15 @@ function KickAnim:sample(t)
 	local tall = self.tall
 	local reach = self.reach
 	local contact = t >= KickAnim.CONTACT_TIME
+	local sp = self.sp
 
 	-- Yüksek topta bacak daha yukarı çıkar (negatif hip = öne)
 	-- Yüksek top: kalça daha çok bükülür, savurma düzlemi yükselir
 	local swingHigh = 0.55 + 1.35 * tall
 	local backAngle = 0.90 * amp
 	local contactAngle = -(swingHigh * amp)
-	local followAngle = -((swingHigh + 0.50) * amp)
+	-- Takip yüksekliği vuruş türüne göre (drive yüksek, place kısa)
+	local followAngle = -((swingHigh + 0.50) * amp) * sp.followY
 
 	-- Hip: daha yumuşak hazırlık, sert savurma, geniş takip
 	local hipX = Ease.track(t, {
@@ -117,8 +132,8 @@ function KickAnim:sample(t)
 		{ t = 0.62, v = 0.08 },
 	})
 
-	-- Temas anında ayak bileği: yüksek topta daha düz, alçakta iç üstü
-	local ankleContact = 0.35 + 0.15 * tall
+	-- Temas anında ayak bileği: vuruş türüne göre (drive sıkı kilit, place açık)
+	local ankleContact = (0.35 + 0.15 * tall) * sp.ankleMult
 	local ankleX = Ease.track(t, {
 		{ t = 0.00, v = 0.10 },
 		{ t = 0.13, v = -0.30 },
@@ -132,14 +147,17 @@ function KickAnim:sample(t)
 	local supportKnee = 0.20 + 0.42 * tall + 0.18 * math.abs(reach)
 
 	-- Gövde: savurmada ters, temasta öne, yüksek topta güçlü geriye
+	-- outside (trivela): gövde hafif geri (bodyLeanBack), az ileri eğim
+	local spineLeanMult = sp.bodyLeanBack and 0.6 or 1.0
 	local spineY = Ease.track(t, {
 		{ t = 0.00, v = 0 },
 		{ t = 0.13, v = 0.38 * amp },
-		{ t = 0.24, v = -0.34 * amp },
-		{ t = 0.40, v = -0.48 * amp },
+		{ t = 0.24, v = -0.34 * amp * spineLeanMult },
+		{ t = 0.40, v = -0.48 * amp * spineLeanMult },
 		{ t = 0.62, v = 0 },
 	})
-	local spineX = 0.12 + 0.50 * tall -- yüksek top: daha çok geriye
+	-- Gövde ileri eğimi vuruş türüne göre (drive çok öne, place daha dik)
+	local spineX = (0.12 + 0.50 * tall) * sp.spineXMult
 	local spineZ = -0.25 * reach
 
 	-- Kollar: karşı kol daha çok açılır (denge), vuran kol daha sığ
@@ -167,9 +185,28 @@ function KickAnim:sample(t)
 	pose.neck = Pose.joint(0.12 + 0.12 * (1 - tall), -spineY * 0.5, 0)
 	pose.head = Pose.joint(0.06, 0, 0)
 
+	-- Kalça abduksiyonu (hipZ): vuruş türüne ve ayak yönüne göre
+	-- place: geniş abduksiyon (iç ayakla vurmak için kalça dışa), outside: ters abduksiyon
+	-- Elle seçilen ayakta yön o ayağın dışına doğru; otomatikte topun yanına doğru.
+	local hipZDir, hipZMag
+	if self.foot == "R" then
+		hipZDir = 1
+	else
+		hipZDir = -1
+	end
+	if self.shotType == "outside" then
+		hipZDir = -hipZDir -- ayak dışı vuruşunda kalça ters yönlü açılır
+	end
+	if self.manualFoot then
+		hipZMag = self.charge -- elle seçilmişse güçle arttır
+	else
+		hipZMag = math.abs(self.reach) -- otomatikse topun yanına göre
+	end
+	local hipZ = hipZDir * hipZMag * 0.25 * sp.hipZMult
+
 	-- Vuran bacak: daha geniş kalça açısı, topa göre hizalı
 	local kickHip = pose["hip" .. self.foot]
-	kickHip = Pose.joint(hipX, 0.14 * self.reach, (self.foot == "R" and -1 or 1) * 0.25 * math.abs(reach))
+	kickHip = Pose.joint(hipX, 0.14 * self.reach, hipZ)
 	pose["hip" .. self.foot] = kickHip
 	pose["knee" .. self.foot] = Pose.joint(kneeX, 0, 0)
 	pose["ankle" .. self.foot] = Pose.joint(ankleX, 0, 0)

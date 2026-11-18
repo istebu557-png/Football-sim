@@ -51,6 +51,27 @@ local HALF_LENGTH = PITCH and PITCH.halfLength or 52.5
 local GOAL_PLANE = HALF_LENGTH * S
 local CHARGE_TIME = (Config and Config.BALL_CONTROL and Config.BALL_CONTROL.chargeTime) or 0.9
 
+-- ---------------------------------------------------------------- vuruş türü / ayak seçimi (profesyonel biomekanik)
+local SHOT = Config and Config.SHOT or { types = { "instep" }, labels = { instep = "Düz ayak" } }
+local shotTypes = SHOT.types or { "instep" }
+local shotIndex = 1
+local currentFoot = "R" -- "L" | "R"
+
+local function shotLabel()
+	local st = shotTypes[shotIndex] or "instep"
+	return (SHOT.labels and SHOT.labels[st] or st) .. "  |  ayak: " .. currentFoot
+end
+
+local function cycleShotType()
+	shotIndex = shotIndex % #shotTypes + 1
+	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+end
+
+local function toggleFoot()
+	currentFoot = (currentFoot == "R") and "L" or "R"
+	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+end
+
 -- ---------------------------------------------------------------- karakter
 local character, hrp
 local function bindCharacter(char)
@@ -120,7 +141,7 @@ hint.BorderSizePixel = 0
 hint.TextColor3 = Color3.fromRGB(232, 240, 246)
 hint.Font = Enum.Font.GothamMedium
 hint.TextSize = 15
-hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   V → izleme kipi   |   R → topu sıfırla"
+hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
 hint.Parent = gui
 
 local hintCorner = Instance.new("UICorner")
@@ -219,7 +240,7 @@ local function fireKick()
 	if not aim then
 		return
 	end
-	kickRemote:FireServer(charge, aim.Z / S, aim.Y / S)
+	kickRemote:FireServer(charge, aim.Z / S, aim.Y / S, shotTypes[shotIndex] or "instep", currentFoot)
 end
 
 UserInputService.InputBegan:Connect(function(input, processed)
@@ -234,6 +255,10 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		resetRemote:FireServer()
 	elseif input.KeyCode == Enum.KeyCode.V then
 		spectator = not spectator
+	elseif input.KeyCode == Enum.KeyCode.T then
+		cycleShotType()
+	elseif input.KeyCode == Enum.KeyCode.F then
+		toggleFoot()
 	end
 end)
 
@@ -454,7 +479,7 @@ resetBall()
 local lastKickAt = {}
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 
-kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
+kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
 	local now = os.clock()
 	if lastKickAt[player] and now - lastKickAt[player] < 0.35 then
 		return
@@ -489,7 +514,7 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 	end
 	local lateral = math.tan(errRad) * dist
 
-	-- Topun oyuncuya göre konumu -> adaptif şut pozisyonu (hangi ayak, vole mi?)
+	-- Topun oyuncuya göre konumu -> adaptif şut pozisyonu (vuruş türü + ayak)
 	local toBall = Vec3.withY(Vec3.sub(sim.ball.pos, state.pos), 0)
 	local forward = Vec3.new(math.cos(state.facing), 0, math.sin(state.facing))
 	local right = Vec3.cross(forward, Vec3.new(0, 1, 0))
@@ -498,6 +523,8 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 		ballLateral = Vec3.dot(toBall, right),
 		ballForward = Vec3.dot(toBall, forward),
 		charge = c,
+		shotType = shotType or "instep",
+		foot = foot or nil, -- nil -> otomatik (topun yanına göre)
 	})
 
 	local speed = control:speedForCharge(c)
@@ -1120,6 +1147,7 @@ return KeeperAnim
 local Ease = require(script.Parent.Ease)
 local Pose = require(script.Parent.Pose)
 local Vec3 = require(script.Parent.Parent.Core.Vec3)
+local Config = require(script.Parent.Parent.Config)
 
 local KickAnim = {}
 KickAnim.__index = KickAnim
@@ -1135,9 +1163,12 @@ local clamp01 = Ease.clamp01
 	ballForward : topun önde (+) / arkada (-) olması (m)
 	charge      : 0..1 şut gücü
 	foot        : "L" | "R" (verilmezse topun yanına göre seçilir)
+	shotType    : "place" | "instep" | "drive" | "outside" (verilmezse "instep")
 ]]
 function KickAnim.new(opts)
 	opts = opts or {}
+
+	local SHOT = Config.SHOT
 
 	local charge = clamp01(opts.charge or 0.7)
 	local height = math.max(0, opts.ballHeight or 0.11)
@@ -1149,14 +1180,20 @@ function KickAnim.new(opts)
 		foot = (lateral >= 0) and "R" or "L"
 	end
 
+	local shotType = opts.shotType or "instep"
+	local sp = SHOT.types and SHOT[shotType] or SHOT.instep
+
 	-- Yüksek top -> vole: savurma düzlemi yükselir
 	local tall = clamp01((height - 0.45) / 1.1)
-	-- Genlik güçle artar
-	local amp = 0.82 + 0.42 * charge
+	-- Genlik: güç + vuruş türü baz çarpanı
+	local amp = (0.82 + 0.42 * charge) * sp.power
 	-- Yana uzanma (kalça abduksiyonu)
 	local reach = math.max(-1, math.min(1, lateral / 0.55))
 	-- Top çok gerideyse daha kısa, daha kontrollü vuruş
 	local behind = math.max(-1, math.min(0, forward / 0.6))
+
+	-- Elle seçilen mi? (otomatikse topun yanına göre ayak seçilmiş olur)
+	local manualFoot = opts.foot ~= nil
 
 	return setmetatable({
 		charge = charge,
@@ -1165,6 +1202,9 @@ function KickAnim.new(opts)
 		forward = forward,
 		foot = foot,
 		otherFoot = foot == "R" and "L" or "R",
+		shotType = shotType,
+		sp = sp,
+		manualFoot = manualFoot,
 		tall = tall,
 		amp = amp,
 		reach = reach,
@@ -1186,13 +1226,15 @@ function KickAnim:sample(t)
 	local tall = self.tall
 	local reach = self.reach
 	local contact = t >= KickAnim.CONTACT_TIME
+	local sp = self.sp
 
 	-- Yüksek topta bacak daha yukarı çıkar (negatif hip = öne)
 	-- Yüksek top: kalça daha çok bükülür, savurma düzlemi yükselir
 	local swingHigh = 0.55 + 1.35 * tall
 	local backAngle = 0.90 * amp
 	local contactAngle = -(swingHigh * amp)
-	local followAngle = -((swingHigh + 0.50) * amp)
+	-- Takip yüksekliği vuruş türüne göre (drive yüksek, place kısa)
+	local followAngle = -((swingHigh + 0.50) * amp) * sp.followY
 
 	-- Hip: daha yumuşak hazırlık, sert savurma, geniş takip
 	local hipX = Ease.track(t, {
@@ -1212,8 +1254,8 @@ function KickAnim:sample(t)
 		{ t = 0.62, v = 0.08 },
 	})
 
-	-- Temas anında ayak bileği: yüksek topta daha düz, alçakta iç üstü
-	local ankleContact = 0.35 + 0.15 * tall
+	-- Temas anında ayak bileği: vuruş türüne göre (drive sıkı kilit, place açık)
+	local ankleContact = (0.35 + 0.15 * tall) * sp.ankleMult
 	local ankleX = Ease.track(t, {
 		{ t = 0.00, v = 0.10 },
 		{ t = 0.13, v = -0.30 },
@@ -1227,14 +1269,17 @@ function KickAnim:sample(t)
 	local supportKnee = 0.20 + 0.42 * tall + 0.18 * math.abs(reach)
 
 	-- Gövde: savurmada ters, temasta öne, yüksek topta güçlü geriye
+	-- outside (trivela): gövde hafif geri (bodyLeanBack), az ileri eğim
+	local spineLeanMult = sp.bodyLeanBack and 0.6 or 1.0
 	local spineY = Ease.track(t, {
 		{ t = 0.00, v = 0 },
 		{ t = 0.13, v = 0.38 * amp },
-		{ t = 0.24, v = -0.34 * amp },
-		{ t = 0.40, v = -0.48 * amp },
+		{ t = 0.24, v = -0.34 * amp * spineLeanMult },
+		{ t = 0.40, v = -0.48 * amp * spineLeanMult },
 		{ t = 0.62, v = 0 },
 	})
-	local spineX = 0.12 + 0.50 * tall -- yüksek top: daha çok geriye
+	-- Gövde ileri eğimi vuruş türüne göre (drive çok öne, place daha dik)
+	local spineX = (0.12 + 0.50 * tall) * sp.spineXMult
 	local spineZ = -0.25 * reach
 
 	-- Kollar: karşı kol daha çok açılır (denge), vuran kol daha sığ
@@ -1262,9 +1307,28 @@ function KickAnim:sample(t)
 	pose.neck = Pose.joint(0.12 + 0.12 * (1 - tall), -spineY * 0.5, 0)
 	pose.head = Pose.joint(0.06, 0, 0)
 
+	-- Kalça abduksiyonu (hipZ): vuruş türüne ve ayak yönüne göre
+	-- place: geniş abduksiyon (iç ayakla vurmak için kalça dışa), outside: ters abduksiyon
+	-- Elle seçilen ayakta yön o ayağın dışına doğru; otomatikte topun yanına doğru.
+	local hipZDir, hipZMag
+	if self.foot == "R" then
+		hipZDir = 1
+	else
+		hipZDir = -1
+	end
+	if self.shotType == "outside" then
+		hipZDir = -hipZDir -- ayak dışı vuruşunda kalça ters yönlü açılır
+	end
+	if self.manualFoot then
+		hipZMag = self.charge -- elle seçilmişse güçle arttır
+	else
+		hipZMag = math.abs(self.reach) -- otomatikse topun yanına göre
+	end
+	local hipZ = hipZDir * hipZMag * 0.25 * sp.hipZMult
+
 	-- Vuran bacak: daha geniş kalça açısı, topa göre hizalı
 	local kickHip = pose["hip" .. self.foot]
-	kickHip = Pose.joint(hipX, 0.14 * self.reach, (self.foot == "R" and -1 or 1) * 0.25 * math.abs(reach))
+	kickHip = Pose.joint(hipX, 0.14 * self.reach, hipZ)
 	pose["hip" .. self.foot] = kickHip
 	pose["knee" .. self.foot] = Pose.joint(kneeX, 0, 0)
 	pose["ankle" .. self.foot] = Pose.joint(ankleX, 0, 0)
@@ -1948,6 +2012,35 @@ Config.PLAYER = {
 	staminaDrainSprint = 0.045, -- 1/s (tam sprintte)
 	staminaRegen = 0.07, -- 1/s (dururken)
 	staminaMinFactor = 0.72, -- yorgunken hız çarpanı
+}
+
+--[[ Vuruş türleri — profesyonel futbolcu şut biomekaniğine göre.
+\tHiçbir yayınlanmış animasyon asset'i yok; tüm parametreler kodla uygulanır.
+\t
+\tTürler:
+\t  place   = Plase (iç ayak) — en çok doğruluk, kalça açık, gövde dik, kısa takip
+\t  instep  = Düz ayak / paltö (laces) — standart güç, ayak kilitli, gövde topun üstünde, tam takip
+\t  drive   = Şanzıman / sürüklü şut — max güç, gövde çok öne eğik, ayak sıkı kilitli, yüksek takip
+\t  outside = Ayak dışı / trivela — kıvrımlı, ayak ters yöne döndürülmüş, kalça ters abduksiyon, gövde hafif geri
+]]--
+Config.SHOT = {
+	types = { "place", "instep", "drive", "outside" },
+	labels = {
+		place   = "Plase (iç ayak)",
+		instep  = "Düz ayak (paltö / laces)",
+		drive   = "Şanzıman (drive)",
+		outside = "Ayak dışı (trivela)",
+	},
+	-- ankleMult : ayak bileği kilidi (1.0 = tam kilit, 0.5 = açık/esnek)
+	-- hipZMult  : kalça abduksiyonu yönü ve miktarı (+ = dışa, - = içe/ters)
+	-- spineXMult: gövde ileri eğimi (1.0 = topun üstünde, 0.75 = dik, 1.3 = çok öne)
+	-- followY   : takip yüksekliği (daha negatif = bacak daha yüksek kalkar)
+	-- power     : savurma genliği çarpanı
+	-- bodyLeanBack: gövde geri eğilir mi? (chip/finesse türleri için)
+	place   = { ankleMult = 0.70, hipZMult = 1.8,  spineXMult = 0.75, followY = -0.55, power = 0.80, bodyLeanBack = false },
+	instep  = { ankleMult = 1.00, hipZMult = 1.0,  spineXMult = 1.00, followY = -1.00, power = 1.00, bodyLeanBack = false },
+	drive   = { ankleMult = 1.25, hipZMult = 0.6,  spineXMult = 1.30, followY = -1.40, power = 1.15, bodyLeanBack = false },
+	outside = { ankleMult = 0.50, hipZMult = -1.6, spineXMult = 0.90, followY = -0.75, power = 0.90, bodyLeanBack = true },
 }
 
 --[[ Oyuncu-top ilişkisi (yakın kontrol / top sürme / şut) ]]
@@ -3823,6 +3916,7 @@ local Vec3 = require(script.Parent.Parent.Core.Vec3)
 local WalkCycle = require(script.Parent.Parent.Anim.WalkCycle)
 local KickAnim = require(script.Parent.Parent.Anim.KickAnim)
 local Ease = require(script.Parent.Parent.Anim.Ease)
+local Config = require(script.Parent.Parent.Config)
 
 local Striker = {}
 Striker.__index = Striker
@@ -3833,6 +3927,7 @@ Striker.COOLDOWN = 1.4 -- şutlar arası bekleme (s)
 Striker.MAX_WAIT = 1.2 -- hareketli topa bekleme süresi (s)
 
 local clamp01 = Ease.clamp01
+local SHOT_TYPES = Config and Config.SHOT and Config.SHOT.types or { "instep" }
 
 -- Kaleci pozisyonuna göre dinamik şut hedefi seçer.
 -- Kaleci sola genişlerse (dz < -1) sağ köşeye, sağa genişlerse (dz > 1) sol köşeye,
@@ -3885,6 +3980,7 @@ function Striker.new(cfg, opts)
 		time = 0,
 		shots = 0,
 		aimIndex = 0,
+		shotIndex = 0,
 		target = nil,
 		speed = 0,
 	}, Striker)
@@ -3923,11 +4019,25 @@ function Striker:beginKick(ball, keeperPos)
 	local charge = clamp01(0.42 + distGoal / 42)
 	local speed = 15 + 11 * charge
 
+	-- Vuruş türünü döngüyle değiştir (her şutta farklı biomekanik görünüm)
+	self.shotIndex = (self.shotIndex % #SHOT_TYPES) + 1
+	local shotType = SHOT_TYPES[self.shotIndex]
+
+	-- Ayak otomatik (topun yanına göre) veya kalce yönüne göre tercih
+	local foot = nil
+	if geo.lateral > 0.2 then
+		foot = "R"
+	elseif geo.lateral < -0.2 then
+		foot = "L"
+	end
+
 	self.kick = KickAnim.new({
 		ballHeight = geo.height,
 		ballLateral = geo.lateral,
 		ballForward = geo.forward,
 		charge = charge,
+		shotType = shotType,
+		foot = foot,
 	})
 	self.kickT = 0
 	self.speed = speed

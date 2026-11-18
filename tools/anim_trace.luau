@@ -69,6 +69,45 @@ end
 
 -- ---------------------------------------------------------------- şutlar
 local KICKS = {
+	-- Vuruş türleri (place / instep / drive / outside) — aynı top konumu, farklı gövde/ayak
+	{
+		id = "place",
+		label = "Plase (iç ayak)",
+		desc = "shotType=place: ayak bileği açık, gövde dik, takip düşük. Kontrollü, az güç.",
+		opts = { ballHeight = 0.11, ballLateral = 0.12, ballForward = 0.55, charge = 0.7, shotType = "place" },
+	},
+	{
+		id = "instep",
+		label = "Düz ayak (paltö)",
+		desc = "shotType=instep: standart gövde, orta takip. Dağılim poz.",
+		opts = { ballHeight = 0.11, ballLateral = 0.12, ballForward = 0.55, charge = 0.7, shotType = "instep" },
+	},
+	{
+		id = "drive",
+		label = "Üstü (şanzıman)",
+		desc = "shotType=drive: ayak kilitli, gövde çok öne eğik, yüksek takip. Max güç.",
+		opts = { ballHeight = 0.11, ballLateral = 0.12, ballForward = 0.55, charge = 0.9, shotType = "drive" },
+	},
+	{
+		id = "outside",
+		label = "Ayak dışı",
+		desc = "shotType=outside: ayak ters yöne açık, kalça abduksiyonu ters işaretli. Yan favore.",
+		opts = { ballHeight = 0.11, ballLateral = 0.12, ballForward = 0.55, charge = 0.6, shotType = "outside" },
+	},
+	-- Ayak seçimi (sol / sağ) — aynı vuruş türü, farklı ayak
+	{
+		id = "sag-ayak",
+		label = "Sağ ayakla vuruş",
+		desc = "foot=R: kalça abduksiyonu sağa doğru (hipZ pozitif).",
+		opts = { ballHeight = 0.11, ballLateral = 0.12, ballForward = 0.55, charge = 0.7, shotType = "instep", foot = "R" },
+	},
+	{
+		id = "sol-ayak",
+		label = "Sol ayakla vuruş",
+		desc = "foot=L: kalça abduksiyonu sola doğru (hipZ negatif).",
+		opts = { ballHeight = 0.11, ballLateral = -0.12, ballForward = 0.55, charge = 0.7, shotType = "instep", foot = "L" },
+	},
+	-- Diğer senaryolar
 	{
 		id = "surukleme",
 		label = "Yerden sürükleyici şut",
@@ -197,4 +236,9 @@ for i, sc in ipairs(scenes) do
 end
 out[#out + 1] = "]}"
 
-io.write(table.concat(out, ""))
+-- Parcali yazim: buyuk tek dize stdout'ta kirilabilir
+local full = table.concat(out, "")
+local chunk = 8192
+for i = 1, #full, chunk do
+	io.write(string.sub(full, i, math.min(i + chunk - 1, #full)))
+end

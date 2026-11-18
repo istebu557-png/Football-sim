@@ -36,6 +36,27 @@ local HALF_LENGTH = PITCH and PITCH.halfLength or 52.5
 local GOAL_PLANE = HALF_LENGTH * S
 local CHARGE_TIME = (Config and Config.BALL_CONTROL and Config.BALL_CONTROL.chargeTime) or 0.9
 
+-- ---------------------------------------------------------------- vuruş türü / ayak seçimi (profesyonel biomekanik)
+local SHOT = Config and Config.SHOT or { types = { "instep" }, labels = { instep = "Düz ayak" } }
+local shotTypes = SHOT.types or { "instep" }
+local shotIndex = 1
+local currentFoot = "R" -- "L" | "R"
+
+local function shotLabel()
+	local st = shotTypes[shotIndex] or "instep"
+	return (SHOT.labels and SHOT.labels[st] or st) .. "  |  ayak: " .. currentFoot
+end
+
+local function cycleShotType()
+	shotIndex = shotIndex % #shotTypes + 1
+	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+end
+
+local function toggleFoot()
+	currentFoot = (currentFoot == "R") and "L" or "R"
+	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+end
+
 -- ---------------------------------------------------------------- karakter
 local character, hrp
 local function bindCharacter(char)
@@ -105,7 +126,7 @@ hint.BorderSizePixel = 0
 hint.TextColor3 = Color3.fromRGB(232, 240, 246)
 hint.Font = Enum.Font.GothamMedium
 hint.TextSize = 15
-hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   V → izleme kipi   |   R → topu sıfırla"
+hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
 hint.Parent = gui
 
 local hintCorner = Instance.new("UICorner")
@@ -204,7 +225,7 @@ local function fireKick()
 	if not aim then
 		return
 	end
-	kickRemote:FireServer(charge, aim.Z / S, aim.Y / S)
+	kickRemote:FireServer(charge, aim.Z / S, aim.Y / S, shotTypes[shotIndex] or "instep", currentFoot)
 end
 
 UserInputService.InputBegan:Connect(function(input, processed)
@@ -219,6 +240,10 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		resetRemote:FireServer()
 	elseif input.KeyCode == Enum.KeyCode.V then
 		spectator = not spectator
+	elseif input.KeyCode == Enum.KeyCode.T then
+		cycleShotType()
+	elseif input.KeyCode == Enum.KeyCode.F then
+		toggleFoot()
 	end
 end)
 
