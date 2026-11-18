@@ -133,7 +133,7 @@ resetBall()
 local lastKickAt = {}
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 
-kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
+kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
 	local now = os.clock()
 	if lastKickAt[player] and now - lastKickAt[player] < 0.35 then
 		return
@@ -168,7 +168,7 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 	end
 	local lateral = math.tan(errRad) * dist
 
-	-- Topun oyuncuya göre konumu -> adaptif şut pozisyonu (hangi ayak, vole mi?)
+	-- Topun oyuncuya göre konumu -> adaptif şut pozisyonu (vuruş türü + ayak)
 	local toBall = Vec3.withY(Vec3.sub(sim.ball.pos, state.pos), 0)
 	local forward = Vec3.new(math.cos(state.facing), 0, math.sin(state.facing))
 	local right = Vec3.cross(forward, Vec3.new(0, 1, 0))
@@ -177,6 +177,8 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY)
 		ballLateral = Vec3.dot(toBall, right),
 		ballForward = Vec3.dot(toBall, forward),
 		charge = c,
+		shotType = shotType or "instep",
+		foot = foot or nil, -- nil -> otomatik (topun yanına göre)
 	})
 
 	local speed = control:speedForCharge(c)

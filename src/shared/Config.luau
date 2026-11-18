@@ -95,6 +95,35 @@ Config.PLAYER = {
 	staminaMinFactor = 0.72, -- yorgunken hız çarpanı
 }
 
+--[[ Vuruş türleri — profesyonel futbolcu şut biomekaniğine göre.
+\tHiçbir yayınlanmış animasyon asset'i yok; tüm parametreler kodla uygulanır.
+\t
+\tTürler:
+\t  place   = Plase (iç ayak) — en çok doğruluk, kalça açık, gövde dik, kısa takip
+\t  instep  = Düz ayak / paltö (laces) — standart güç, ayak kilitli, gövde topun üstünde, tam takip
+\t  drive   = Şanzıman / sürüklü şut — max güç, gövde çok öne eğik, ayak sıkı kilitli, yüksek takip
+\t  outside = Ayak dışı / trivela — kıvrımlı, ayak ters yöne döndürülmüş, kalça ters abduksiyon, gövde hafif geri
+]]--
+Config.SHOT = {
+	types = { "place", "instep", "drive", "outside" },
+	labels = {
+		place   = "Plase (iç ayak)",
+		instep  = "Düz ayak (paltö / laces)",
+		drive   = "Şanzıman (drive)",
+		outside = "Ayak dışı (trivela)",
+	},
+	-- ankleMult : ayak bileği kilidi (1.0 = tam kilit, 0.5 = açık/esnek)
+	-- hipZMult  : kalça abduksiyonu yönü ve miktarı (+ = dışa, - = içe/ters)
+	-- spineXMult: gövde ileri eğimi (1.0 = topun üstünde, 0.75 = dik, 1.3 = çok öne)
+	-- followY   : takip yüksekliği (daha negatif = bacak daha yüksek kalkar)
+	-- power     : savurma genliği çarpanı
+	-- bodyLeanBack: gövde geri eğilir mi? (chip/finesse türleri için)
+	place   = { ankleMult = 0.70, hipZMult = 1.8,  spineXMult = 0.75, followY = -0.55, power = 0.80, bodyLeanBack = false },
+	instep  = { ankleMult = 1.00, hipZMult = 1.0,  spineXMult = 1.00, followY = -1.00, power = 1.00, bodyLeanBack = false },
+	drive   = { ankleMult = 1.25, hipZMult = 0.6,  spineXMult = 1.30, followY = -1.40, power = 1.15, bodyLeanBack = false },
+	outside = { ankleMult = 0.50, hipZMult = -1.6, spineXMult = 0.90, followY = -0.75, power = 0.90, bodyLeanBack = true },
+}
+
 --[[ Oyuncu-top ilişkisi (yakın kontrol / top sürme / şut) ]]
 Config.BALL_CONTROL = {
 	bodyRadius = 0.42, -- oyuncu gövde yarıçapı (m)

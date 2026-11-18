@@ -15,6 +15,7 @@ local Vec3 = require(script.Parent.Parent.Core.Vec3)
 local WalkCycle = require(script.Parent.Parent.Anim.WalkCycle)
 local KickAnim = require(script.Parent.Parent.Anim.KickAnim)
 local Ease = require(script.Parent.Parent.Anim.Ease)
+local Config = require(script.Parent.Parent.Config)
 
 local Striker = {}
 Striker.__index = Striker
@@ -25,6 +26,7 @@ Striker.COOLDOWN = 1.4 -- şutlar arası bekleme (s)
 Striker.MAX_WAIT = 1.2 -- hareketli topa bekleme süresi (s)
 
 local clamp01 = Ease.clamp01
+local SHOT_TYPES = Config and Config.SHOT and Config.SHOT.types or { "instep" }
 
 -- Kaleci pozisyonuna göre dinamik şut hedefi seçer.
 -- Kaleci sola genişlerse (dz < -1) sağ köşeye, sağa genişlerse (dz > 1) sol köşeye,
@@ -77,6 +79,7 @@ function Striker.new(cfg, opts)
 		time = 0,
 		shots = 0,
 		aimIndex = 0,
+		shotIndex = 0,
 		target = nil,
 		speed = 0,
 	}, Striker)
@@ -115,11 +118,25 @@ function Striker:beginKick(ball, keeperPos)
 	local charge = clamp01(0.42 + distGoal / 42)
 	local speed = 15 + 11 * charge
 
+	-- Vuruş türünü döngüyle değiştir (her şutta farklı biomekanik görünüm)
+	self.shotIndex = (self.shotIndex % #SHOT_TYPES) + 1
+	local shotType = SHOT_TYPES[self.shotIndex]
+
+	-- Ayak otomatik (topun yanına göre) veya kalce yönüne göre tercih
+	local foot = nil
+	if geo.lateral > 0.2 then
+		foot = "R"
+	elseif geo.lateral < -0.2 then
+		foot = "L"
+	end
+
 	self.kick = KickAnim.new({
 		ballHeight = geo.height,
 		ballLateral = geo.lateral,
 		ballForward = geo.forward,
 		charge = charge,
+		shotType = shotType,
+		foot = foot,
 	})
 	self.kickT = 0
 	self.speed = speed
