@@ -243,7 +243,6 @@ end)
 
 -- ------------------------------------------------------- 6) Ana döngü
 local resetTimer = 0
-local idleTime = 0
 local lastKeeperHits = 0
 
 local keeperAnim = nil
@@ -394,7 +393,6 @@ RunService.Heartbeat:Connect(function(frameDt)
 		sim.lastGoal = nil
 		stats.goals = stats.goals + 1
 		resetTimer = 2.4
-		idleTime = 0
 		broadcastState("goal", { side = goal.side, speed = sim.ball:speed() })
 		print(string.format(
 			"[MAC] GOL | toplam %d gol, %d kurtaris, %d sut | ag esnemesi %.2f m",
@@ -403,21 +401,6 @@ RunService.Heartbeat:Connect(function(frameDt)
 		return
 	end
 
-	-- Şutçu kapalıysa: top boşta kalırsa demo şutu (sahne canlı kalsın)
-	if not ANIM.strikerEnabled and sim.ball:speed() < 0.2 and resetTimer <= 0 then
-		idleTime = idleTime + frameDt
-		if idleTime > 12 then
-			idleTime = 0
-			local from = sim.ball.pos
-			local target = Vec3.new(P.halfLength, rng:range(0.5, 2.0), rng:symmetric(2.8))
-			local velocity = Ballistics.solveLaunch(from, target, rng:range(18, 26), Config.GRAVITY)
-			if isFiniteVec3(velocity) then
-				sim.ball:setState(from, velocity, Vec3.new(0, rng:symmetric(30), 0))
-			end
-		end
-	else
-		idleTime = 0
-	end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
@@ -426,8 +409,10 @@ Players.PlayerRemoving:Connect(function(player)
 	pending[player] = nil
 end)
 
+-- Banner gerçegi soylesin: sutu kim atiyor?
 print(string.format(
-	"[FootballSim] Hazir | yarim saha | 1 kaleci + 1 sutcu (prosedurel iskelet) | top fizigi %d Hz | %d direk engeli",
+	"[FootballSim] Hazir | yarim saha | 1 kaleci (AI) + %s | top fizigi %d Hz | %d direk engeli",
+	Config.ANIM.strikerEnabled and "1 sutcu NPC (demo)" or "sut: oynayan oyuncu",
 	Config.SIM_HZ,
 	#sim.obstacles
 ))

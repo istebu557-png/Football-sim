@@ -130,7 +130,7 @@ local function buildSurface(root, opts)
 		"Grass",
 		Vector3.new(width * S, 2, P.width * S),
 		CFrame.new(centerX * S, -0.98, 0), -- üst yüz y=0.02: varsayılan Baseplate ile z-fighting olmaz
-		Color3.fromRGB(38, 104, 56),
+		Color3.fromRGB(42, 112, 60),
 		Enum.Material.Grass,
 		{ collide = true }
 	)
@@ -145,7 +145,9 @@ local function buildSurface(root, opts)
 			"Stripe" .. tostring(i),
 			Vector3.new(w * S, 0.02, P.width * S),
 			CFrame.new(v3(x, 0.001, 0)),
-			i % 2 == 0 and Color3.fromRGB(44, 116, 62) or Color3.fromRGB(40, 108, 58),
+			-- Biçim şeritleri uzaktan da seçilsin diye kontrastlı (eski fark %4'tü,
+			-- ekran görüntüsünde çim tek düz bir yeşil gibi görünüyordu)
+			i % 2 == 0 and Color3.fromRGB(56, 138, 74) or Color3.fromRGB(38, 104, 56),
 			Enum.Material.Grass,
 			{ castShadow = false }
 		)
@@ -208,6 +210,13 @@ local function buildLines(root, opts)
 		drawLine(folder, "GoalAreaLine" .. sideTag, gaX, -P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
 		drawLine(folder, "GoalAreaSide" .. sideTag .. "North", gl, -P.goalAreaHalfWidth, gaX, -P.goalAreaHalfWidth)
 		drawLine(folder, "GoalAreaSide" .. sideTag .. "South", gl, P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
+
+		-- Ceza yayı ("D"): penaltı noktası merkezli 9.15 m, yalnızca ceza sahası
+		-- çizgisinin DIŞINDA kalan kavıs (gerçek saha işareti)
+		local arcPhi = math.acos(5.5 / 9.15)
+		local arcMid = side > 0 and math.pi or 0
+		drawArc(folder, "PenaltyArc" .. sideTag, gl - side * P.penaltySpot, 0, 9.15,
+			arcMid - arcPhi, arcMid + arcPhi, 14)
 
 		makePart(
 			folder,
@@ -326,7 +335,12 @@ local function buildKeeper(root, side)
 	folder.Name = "Goalkeeper"
 	folder.Parent = root
 
-	local model = PartRig.build(folder, { name = "Rig", studsPerMeter = S })
+	-- Turuncu forma: yeşil sahada kaleci ilk bakışta seçilsin (beyaz/gri kayboluyordu)
+	local model = PartRig.build(folder, {
+		name = "Rig",
+		studsPerMeter = S,
+		kitColor = Color3.fromRGB(255, 152, 28),
+	})
 	local x = side * (P.halfLength - K.lineOffset)
 	model.x = x
 	model.side = side
@@ -352,18 +366,219 @@ local function buildStriker(root, side, startPos)
 	return model
 end
 
+-- Stadyum hissi: apron + tribün + reklam panosu + köşe flamaları + ışık kuleleri.
+-- Hepsi prosedürel (asset yok); parça adları sayaçla benzersizleşir.
+local BOARD_COLORS = {
+	Color3.fromRGB(24, 58, 138),
+	Color3.fromRGB(238, 242, 246),
+	Color3.fromRGB(168, 32, 44),
+	Color3.fromRGB(16, 104, 96),
+}
+local SEAT_COLORS = {
+	Color3.fromRGB(132, 30, 38),
+	Color3.fromRGB(30, 44, 74),
+}
+
+local function buildStand(parent, name, cx, cz, lengthStuds, alongZ, sideSign)
+	-- 4 kademeli tribün + arka duvar + çatı bandı
+	local concrete = Color3.fromRGB(92, 96, 104)
+	for i = 1, 4 do
+		local rise = i * 1.15
+		local off = (3.2 + i * 1.5) * sideSign
+		local size = alongZ
+			and Vector3.new(6 * S, 1.15, lengthStuds)
+			or Vector3.new(lengthStuds, 1.15, 6 * S)
+		local px = alongZ and cx + off or cx
+		local pz = alongZ and cz or cz + off
+		makePart(
+			parent,
+			name .. "Tier" .. tostring(i),
+			size,
+			CFrame.new(px, rise * S * 0.5 - 0.5, pz),
+			i % 2 == 1 and SEAT_COLORS[1] or SEAT_COLORS[2],
+			Enum.Material.SmoothPlastic,
+			{ castShadow = false }
+		)
+	end
+	-- Arka duvar ve çatı: silüet tribünü stadyum gibi gösterir
+	local wallOff = (3.2 + 5 * 1.5) * sideSign
+	local wallSize = alongZ and Vector3.new(1.2 * S, 7.5 * S, lengthStuds) or Vector3.new(lengthStuds, 7.5 * S, 1.2 * S)
+	makePart(
+		parent,
+		name .. "Wall",
+		wallSize,
+		CFrame.new(alongZ and cx + wallOff or cx, 3.2 * S, alongZ and cz or cz + wallOff),
+		concrete,
+		Enum.Material.Concrete,
+		{ castShadow = false }
+	)
+	makePart(
+		parent,
+		name .. "Roof",
+		alongZ and Vector3.new(8.5 * S, 0.35, lengthStuds) or Vector3.new(lengthStuds, 0.35, 8.5 * S),
+		CFrame.new(alongZ and cx + wallOff * 0.7 or cx, 6.6 * S, alongZ and cz or cz + wallOff * 0.7),
+		Color3.fromRGB(226, 230, 236),
+		Enum.Material.Metal,
+		{ castShadow = false }
+	)
+end
+
+local function buildSurround(root, opts)
+	local folder = Instance.new("Folder")
+	folder.Name = "Surround"
+	folder.Parent = root
+
+	local HL, HW = P.halfLength, P.halfWidth
+	local x0 = opts.half and 0 or -HL
+	local lenX = HL - x0
+	local cx = (x0 + HL) / 2
+
+	-- Apron: sahanın dışındaki gri boşluğu kapatır (ekrandaki "hiçlik" hissi)
+	makePart(
+		folder,
+		"Apron",
+		Vector3.new((lenX + 90) * S, 1.6, (P.width + 90) * S),
+		CFrame.new(cx * S, -1.05, 0),
+		Color3.fromRGB(30, 62, 40),
+		Enum.Material.Grass,
+		{ collide = false, castShadow = false }
+	)
+	makePart(
+		folder,
+		"Concourse",
+		Vector3.new((lenX + 46) * S, 1.2, (P.width + 46) * S),
+		CFrame.new(cx * S, -0.62, 0),
+		Color3.fromRGB(74, 78, 86),
+		Enum.Material.Concrete,
+		{ collide = false, castShadow = false }
+	)
+
+	-- Tribünler: kuzey/güney kenarları + kale arkası
+	buildStand(folder, "StandNorth", cx * S, -(HW + 12) * S, (lenX + 24) * S, false, -1)
+	buildStand(folder, "StandSouth", cx * S, (HW + 12) * S, (lenX + 24) * S, false, 1)
+	buildStand(folder, "StandEast", (HL + 14) * S, 0, (P.width + 24) * S, true, 1)
+	if not opts.half then
+		buildStand(folder, "StandWest", (-HL - 14) * S, 0, (P.width + 24) * S, true, -1)
+	end
+
+	-- Reklam panoları: saha çevresinde renkli bant (ölçek hissi verir)
+	local boardIndex = 0
+	local function board(name, cxm, czm, sxm, szm, rotY)
+		boardIndex = boardIndex + 1
+		local color = BOARD_COLORS[(boardIndex % #BOARD_COLORS) + 1]
+		makePart(
+			folder,
+			name .. tostring(boardIndex),
+			Vector3.new(sxm * S, 0.95, szm * S),
+			CFrame.new(cxm * S, 0.5, czm * S) * CFrame.Angles(0, rotY or 0, 0),
+			color,
+			Enum.Material.SmoothPlastic,
+			{ castShadow = false }
+		)
+	end
+	local longBoards = 10
+	for i = 1, longBoards do
+		local bx = x0 + lenX * ((i - 0.5) / longBoards)
+		board("AdBoardTouchN", bx, -(HW + 2.2), lenX / longBoards - 0.4, 0.14, 0)
+		board("AdBoardTouchS", bx, HW + 2.2, lenX / longBoards - 0.4, 0.14, 0)
+	end
+	local endBoards = 8
+	for i = 1, endBoards do
+		local bz = -HW + P.width * ((i - 0.5) / endBoards)
+		board("AdBoardEast", HL + 2.6, bz, 0.14, P.width / endBoards - 0.4, 0)
+		if not opts.half then
+			board("AdBoardWest", -HL - 2.6, bz, 0.14, P.width / endBoards - 0.4, 0)
+		else
+			board("AdBoardWest", x0 - 2.6, bz, 0.14, P.width / endBoards - 0.4, 0)
+		end
+	end
+
+	-- Köşe flamaları (yarım sahada 4 köşe)
+	local corners = {
+		{ x = x0, z = -HW, tag = "NW" },
+		{ x = x0, z = HW, tag = "SW" },
+		{ x = HL, z = -HW, tag = "NE" },
+		{ x = HL, z = HW, tag = "SE" },
+	}
+	if not opts.half then
+		corners[#corners + 1] = { x = -HL, z = -HW, tag = "WN" }
+		corners[#corners + 1] = { x = -HL, z = HW, tag = "WS" }
+	end
+	for _, c in ipairs(corners) do
+		makePart(
+			folder,
+			"FlagPole" .. c.tag,
+			Vector3.new(0.06 * S, 1.5, 0.06 * S),
+			CFrame.new(c.x * S, 0.75 * S, c.z * S),
+			Color3.fromRGB(244, 246, 250),
+			Enum.Material.SmoothPlastic,
+			{ castShadow = false }
+		)
+		makePart(
+			folder,
+			"Flag" .. c.tag,
+			Vector3.new(0.42, 0.3, 0.03),
+			CFrame.new(c.x * S + 0.21, 1.35 * S, c.z * S),
+			Color3.fromRGB(255, 214, 64),
+			Enum.Material.Neon,
+			{ castShadow = false }
+		)
+	end
+
+	-- Işık kuleleri: gökyüzüne silüet verir, gece modunda sahneyi taşır
+	local pylons = {
+		{ x = x0 - 8, z = -(HW + 9), tag = "NW" },
+		{ x = x0 - 8, z = HW + 9, tag = "SW" },
+		{ x = HL + 9, z = -(HW + 9), tag = "NE" },
+		{ x = HL + 9, z = HW + 9, tag = "SE" },
+	}
+	for _, py in ipairs(pylons) do
+		makePart(
+			folder,
+			"LightPole" .. py.tag,
+			Vector3.new(0.9, 16 * S, 0.9),
+			CFrame.new(py.x * S, 8 * S, py.z * S),
+			Color3.fromRGB(58, 62, 70),
+			Enum.Material.Metal,
+			{ castShadow = false }
+		)
+		makePart(
+			folder,
+			"LightHead" .. py.tag,
+			Vector3.new(4.5 * S, 2.2 * S, 0.5),
+			CFrame.new(py.x * S, 16.4 * S, py.z * S) * CFrame.Angles(0, 0, 0),
+			Color3.fromRGB(255, 246, 214),
+			Enum.Material.Neon,
+			{ castShadow = false }
+		)
+	end
+
+	return folder
+end
+
 local function setupLighting()
 	local Lighting = game:GetService("Lighting")
 	pcall(function()
-		Lighting.ClockTime = 15.5
-		Lighting.Brightness = 2.3
-		Lighting.Ambient = Color3.fromRGB(72, 82, 92)
-		Lighting.OutdoorAmbient = Color3.fromRGB(126, 136, 146)
-		Lighting.EnvironmentDiffuseScale = 0.45
-		Lighting.EnvironmentSpecularScale = 0.3
+		-- Altın saat: çim doygun, gölgeler uzun, ufuk sıcak (15.5 düz öğle ışığı
+		-- ekran görüntüsünde soluk ve gri duruyordu)
+		Lighting.ClockTime = 16.8
+		Lighting.Brightness = 2.6
+		Lighting.Ambient = Color3.fromRGB(84, 86, 92)
+		Lighting.OutdoorAmbient = Color3.fromRGB(142, 148, 156)
+		Lighting.EnvironmentDiffuseScale = 0.55
+		Lighting.EnvironmentSpecularScale = 0.35
 		Lighting.GlobalShadows = true
-		Lighting.ExposureCompensation = 0.1
+		Lighting.ExposureCompensation = 0.15
+		Lighting.FogEnd = 900
+		Lighting.FogColor = Color3.fromRGB(186, 199, 212)
 	end)
+
+	-- Gökyüzü: varsayılan gri ufuk yerine bulutlu mavi (Sky yoksa stüdyo boşluğu görünür)
+	if not Lighting:FindFirstChildOfClass("Sky") then
+		local sky = Instance.new("Sky")
+		sky.Name = "StadiumSky"
+		sky.Parent = Lighting
+	end
 
 	if not Lighting:FindFirstChildOfClass("Atmosphere") then
 		local atm = Instance.new("Atmosphere")
@@ -373,6 +588,28 @@ local function setupLighting()
 		atm.Color = Color3.fromRGB(199, 212, 224)
 		atm.Parent = Lighting
 	end
+
+	-- Hafif sunum efektleri: güneş ışınları + bloom + doygunluk
+	if not Lighting:FindFirstChildOfClass("SunRaysEffect") then
+		local rays = Instance.new("SunRaysEffect")
+		rays.Intensity = 0.32
+		rays.Spread = 0.7
+		rays.Parent = Lighting
+	end
+	if not Lighting:FindFirstChildOfClass("BloomEffect") then
+		local bloom = Instance.new("BloomEffect")
+		bloom.Intensity = 0.35
+		bloom.Size = 24
+		bloom.Threshold = 2.2
+		bloom.Parent = Lighting
+	end
+	if not Lighting:FindFirstChildOfClass("ColorCorrectionEffect") then
+		local cc = Instance.new("ColorCorrectionEffect")
+		cc.Saturation = 0.18
+		cc.Contrast = 0.06
+		cc.Brightness = 0.02
+		cc.Parent = Lighting
+	end
 end
 
 local function buildSpawn(root, x)
@@ -380,7 +617,9 @@ local function buildSpawn(root, x)
 	spawn.Name = "PitchSpawn"
 	spawn.Anchored = true
 	spawn.Size = Vector3.new(8, 1, 8)
-	spawn.CFrame = CFrame.new(x * S, 0.5, 0)
+	-- Oyuncu sahaya sırtı dönük doğmasın: -Z öne baktığı için -90° yaw ile +X'e
+	-- (kaleye) çeviriyoruz; ilk karede top ve kale kadrajda olur.
+	spawn.CFrame = CFrame.new(x * S, 0.5, 0) * CFrame.Angles(0, -math.rad(90), 0)
 	spawn.Color = Color3.fromRGB(60, 120, 200)
 	spawn.Material = Enum.Material.SmoothPlastic
 	spawn.Transparency = 1
@@ -413,6 +652,8 @@ function SceneBuilder.build(opts)
 
 	buildLines(root, { half = half })
 
+	buildSurround(root, { half = half })
+
 	local goalsFolder = Instance.new("Folder")
 	goalsFolder.Name = "Goals"
 	goalsFolder.Parent = root
@@ -431,7 +672,12 @@ function SceneBuilder.build(opts)
 	local ballStart = half and Vector3.new((P.halfLength * 0.40) * S, Config.BALL.radius * S, 0)
 		or Vector3.new(0, Config.BALL.radius * S, 0)
 	local strikerStart = Vec3.new(ballStart.X / S - 1.45, 0, 0.75)
-	local striker = buildStriker(root, goalSide, strikerStart)
+	-- Şutçu NPC kapalıysa sahaya MANKEN koymuyoruz: donuk duran bir oyuncu
+	-- "oynayan biri var" hissi verip kafa karıştırır. Sahada şutu atan sizsiniz.
+	local striker = nil
+	if Config.ANIM.strikerEnabled then
+		striker = buildStriker(root, goalSide, strikerStart)
+	end
 	setupLighting()
 
 	-- Doğma noktası: yarım sahada topun gerisinde (animasyonlar görüş alanında)

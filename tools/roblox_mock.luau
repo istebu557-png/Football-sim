@@ -1137,8 +1137,11 @@ function Mock.install()
 	set("Vector2", { new = makeVector2, zero = makeVector2(0, 0), one = makeVector2(1, 1) })
 	set("CFrame", CFrameLib)
 	set("Color3", {
+		-- GERÇEK Roblox semantiği: fromRGB 0-255 alır, 0..1'e normalize eder.
+		-- (Eskiden ham 0-255 saklanıyordu; Color bileşeni okuyan her kod/mock
+		-- karşılaştırması yanlış ölçekle çalışıyordu.)
 		fromRGB = function(r, g, b)
-			return { R = r or 0, G = g or 0, B = b or 0 }
+			return { R = (r or 0) / 255, G = (g or 0) / 255, B = (b or 0) / 255 }
 		end,
 		fromHSV = function(h, s, v)
 			return { R = v, G = v, B = v, H = h, S = s, V = v }

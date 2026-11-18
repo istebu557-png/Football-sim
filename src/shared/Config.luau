@@ -183,7 +183,10 @@ Config.NET = {
 	Pozlar Anim/Rig (FK) + Anim/KickAnim + Anim/KeeperAnim tarafından üretilir. ]]
 Config.ANIM = {
 	poseHumanoid = true, -- oyuncunun R15 eklemleri sunucudan sürülsün mü (deneysel)
-	strikerEnabled = true, -- prosedürel şutçu NPC'si (sunucu tarafı demo)
+	-- Prosedürel şutçu NPC'si VARSAYILAN KAPALI: sahada şutu atan oyuncunun
+	-- KENDİSİdir (SPACE), kaleci ise AI. NPC ancak demo/test için açılır
+	-- (Config.ANIM.strikerEnabled = true) — açıkken yürür ve şut çeker.
+	strikerEnabled = false,
 	keeperPoseEnabled = true, -- kaleci iskeleti gerçekten pozlansın mı
 }
 

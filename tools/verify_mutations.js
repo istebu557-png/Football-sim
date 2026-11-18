@@ -80,7 +80,7 @@ const CASES = [
   ["M15 iz: index.html olmayan alanı okuyor", [F.index], "iz",
     (s) => s.replace("shot.curve", "shot.eğrilikYok")],
   ["M16 belge: README test sayısı bayatladı", [F.readme], "belge",
-    (s) => s.replace("**119 kontrol**", "**99 kontrol**")],
+    (s) => s.replace("**123 kontrol**", "**99 kontrol**")],
   ["M17 önizleme: preview/anim.html silindi", [F.anim], "onizleme",
     () => null], // özel: dosya silinir (aşağıda DELETE olarak ele alınır)
   ["M18 bir spec kontrolü başarısız", [F.spec], "testler",

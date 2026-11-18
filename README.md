@@ -7,7 +7,8 @@ Roblox için **gerçekçi** bir futbol motoru, adım adım inşa ediliyor.
 herhangi bir yayınlanmış Asset / Animation instance yok.
 
 > Luau · Rojo uyumlu · Fizik: kendi deterministik entegratörümüz (240 Hz)
-> **Şu anki kapsam:** yarım saha, 1 kale, 1 kaleci, 1 şutçu (11v11 sonra).
+> **Şu anki kapsam:** yarım saha, 1 kale, 1 kaleci (AI). Şutu **oynayan oyuncu** atar;
+> prosedürel şutçu NPC demo/test için opt-in (`Config.ANIM.strikerEnabled = true`).
 
 ---
 
@@ -31,12 +32,12 @@ herhangi bir yayınlanmış Asset / Animation instance yok.
 
 Kurulum: 25 ModuleScript (`ReplicatedStorage/Shared/**`), `SimLoop` (Script,
 `ServerScriptService/Server`), `BallView` (LocalScript, `StarterPlayerScripts/Client`),
-yarım saha + kale + ağ + kaleci + top + ışık (`Workspace/FootballPitch`,
+yarım saha + kale + ağ + kaleci + top + stadyum çevresi (`Workspace/FootballPitch`,
 `Workspace.MatchBall`). İdempotenttir; tekrar çalıştırınca çoğaltmaz.
 
 ```bash
 npm run install:build   # kurulum dosyasını src/'den yeniden üret
-npm test                # 119 kontrol + kurulum senkron denetimi
+npm test                # 123 kontrol + kurulum senkron denetimi
 ```
 
 ---
@@ -60,7 +61,7 @@ kırmızıysa çıkış kodu `1` döner. Her kapı kendi alanında kanıt üreti
 | 6 | Kurulum | `install/FootballSim_Install.lua` kaynaklarla **bit-bit senkron**: 25 ModuleScript + 1 Script + 1 LocalScript, sınıf ve kaynak birebir |
 | 7 | Rojo | `default.project.json` `src/`'nin **tamamını** eşliyor; eşlenmemiş tek dosya yok |
 | 8 | Remote + otorite | `Kick` / `ResetBall` / `MatchState` iki tarafta da var; `FireServer` argüman sayısı = `OnServerEvent` parametre sayısı; `MatchState` alanları istemcinin okuduklarını kapsıyor; `InputEnded → fireKick` zinciri kopuk değil; **her `Ballistics.solveLaunch` çıktısı `isFiniteVec3` denetiminden geçiyor** (silinirse kapı düşer) |
-| 9 | Testler | `tools/spec.luau` → **119 kontrol**, 15 grup, 0 başarısız (test sayısı geri giderse ya da bir grup hiç koşmazsa kapı düşer) |
+| 9 | Testler | `tools/spec.luau` → **123 kontrol**, 15 grup, 0 başarısız (test sayısı geri giderse ya da bir grup hiç koşmazsa kapı düşer) |
 | 10 | Fizik izi | `preview/trace.json` üretiliyor; 6 senaryo, 635 yol noktası sonlu; falso > 2 m, direk gol değil, ağ esner ve topu yutar; `index.html`'in okuduğu her alan JSON'da var |
 | 11 | Anim izi | `preview/anim.json` üretiliyor; 16 sahne / 481 kare, her kare eklem sayısıyla uyumlu ve sonlu; `dive/jump/block/jumpDive` kaleci hareketleri mevcut |
 | 12 | Önizleme | `tools/serve.js` gerçekten ayakta: `/`, `/anim.html`, `/trace.json`, `/anim.json` → 200 + doğru `content-type`, olmayan dosya 404, dizin dışı erişim engelli |
@@ -159,6 +160,23 @@ yörüngeyi verir. Aynı tohum + aynı tick → **bit-bit aynı** sonuç.
   üstel yaklaşma + hız tahminiyle çizer.
 - Sunucu otoritesi + hız sınırlı `SPACE` isteği.
 
+### Görsel sunum (prosedürel, asset yok)
+
+Saha "boş yeşil dikdörtgen" gibi görünmesin diye çevresi de kurulur:
+
+- **Çim:** uzaktan seçilen kontrastlı biçim şeritleri + ceza yayı ("D").
+- **Stadyum:** sahayı saran apron + beton concourse, üç tribün (kuzey/güney/kale
+  arkası; kademeli koltuklar, arka duvar, çatı bandı), saha çevresinde renkli
+  reklam panoları, 4 köşe flaması, 4 ışık kulesi.
+- **Işık:** altın saat (`ClockTime 16.8`), `Sky` (gri stüdyo ufku yerine bulutlu
+  mavi), `Atmosphere` + hafif `SunRays`/`Bloom`/`ColorCorrection`.
+- **Oyuncular:** kaleci turuncu formayla ilk bakışta seçilir; oyuncu sahaya
+  kaleye dönük doğar.
+
+Bunların hiçbiri "elle düzeltilen" sahne değildir: `SceneBuilder` her kurulumda
+aynı ağacı üretir ve 8. grup testleri tribün/pano/flama/ışık/gökyüzü varlığını
+kilitler (bir parça sessizce kaybolursa test düşer).
+
 ---
 
 ## Adım 3 — Oyuncu–top ilişkisi ve file
@@ -211,7 +229,7 @@ fırlatmaz. Model:
 
 ## Ölçülen davranışlar
 
-`npm test` → **119 kontrol**. Öne çıkanlar:
+`npm test` → **123 kontrol**. Öne çıkanlar:
 
 | Ölçüm | Motor | Gerçek dünya |
 |---|---|---|
@@ -275,7 +293,7 @@ npm run preview # http://localhost:8080/anim.html
 
 `preview/anim.html` canvas ile yandan/önden görünüm, oynat/duraklat, zaman çubuğu, temas anı işareti, kemik çizimi ve top işareti sunar. Kaynak: `tools/anim_trace.luau` (11 şut + 5 kaleci sahnesi = 16, `contact` ve `bayrak` alanları ile).
 
-Test: `tools/spec.luau` → **119/119** (8. grup kaleci + kurulum + sahne ağacı, 9. grup anim, 10. grup canlı döngü + şutçu, 11. grup istemci/E2E, 12. grup girdi sertleştirme, 13. grup `Validate` birim testleri, 14. grup fare → nişan).
+Test: `tools/spec.luau` → **123/123** (8. grup kaleci + kurulum + sahne ağacı + stadyum çevresi, 9. grup anim, 10. grup canlı döngü + şutçu, 11. grup istemci/E2E, 12. grup girdi sertleştirme, 13. grup `Validate` birim testleri, 14. grup fare → nişan).
 
 ### Rojo ile (alternatif)
 
@@ -298,7 +316,7 @@ rojo build -o FootballSim.rbxlx
 - [ ] **Adım 6** — 11v11: diziliş, takım AI'sı, baskı, ofansif/defansif geçiş.
 - [ ] **Adım 7** — Ağ: istemci tahmini, gecikme telafisi, bant bütçesi.
 - [ ] **Adım 8** — Sunum: animasyonlar, kamera modları, UI, ses.
-      *Animasyon alt-adımı (şut + kaleci): kodla, FK, testli (119/119). Kamera modu (V izleme) ve HUD (ipucu/güç barı/skor) tamam; ses bekliyor.*
+      *Animasyon alt-adımı (şut + kaleci): kodla, FK, testli (123/123). Kamera modu (V izleme) ve HUD (ipucu/güç barı/skor) tamam; ses bekliyor.*
 
 ---
 

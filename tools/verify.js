@@ -41,7 +41,7 @@ const BUILD = path.join(ROOT, ".build");
 const PREVIEW = path.join(ROOT, "preview");
 const FENGARI = path.join(ROOT, "node_modules", ".bin", "fengari");
 
-const MIN_TESTS = 119; // spec.luau'daki en az kontrol sayısı (geriye gitmesin)
+const MIN_TESTS = 123; // spec.luau'daki en az kontrol sayısı (geriye gitmesin)
 
 /* ------------------------------------------------------------------ yardımcılar */
 
@@ -388,6 +388,7 @@ const ROBLOX_MEMBERS = new Set([
   "X", "Y", "Z", "R", "G", "B", "H", "S", "V", "Magnitude", "Unit", "Keypoints",
   "Time", "Envelope", "Min", "Max", "KeyCode", "UserInputType", "Position", "Delta",
   "Processed", "TargetPoint", "UserId", "Origin", "Direction", "ViewportSize", "FieldOfView",
+  "Intensity", "Spread", "Threshold", "Saturation", "TintColor", "Contrast", "SkyboxBloom",
   // Spawn / Tool
   "AllowTeamChangeOnTouch", "Neutral", "Duration", "AllowGlideOnTouch", "SpawnPoint",
   "RequiresHandle", "Handle", "Grip", "ToolTip", "Activated", "Deactivated", "Equipped",

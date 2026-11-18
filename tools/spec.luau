@@ -918,14 +918,41 @@ test("sahne kuruldu: yarim saha, 1 kale, direkler, ag, kaleci, top", function()
 	check(keeperRig:FindFirstChild("GloveL") ~= nil and keeperRig:FindFirstChild("GloveR") ~= nil, "kaleci eldivenleri yok")
 	check(#keeperRig:GetChildren() == 15, "iskelet 15 parca olmali (13 kemik + 2 eldiven), gelen " .. tostring(#keeperRig:GetChildren()))
 
+	-- Yeni varsayilan: sutu OYUNCU atar, NPC kapali -> sahada manken olmamali
 	local striker = pitch:FindFirstChild("Striker")
-	check(striker ~= nil, "sutcu modeli yok")
-	check(striker:FindFirstChild("Rig") ~= nil, "sutcu iskeleti yok")
+	check(striker == nil,
+		"varsayilanda sutcu NPC sahada olmamali (sutu oynayan oyuncu atar); Striker klasoru bulundu")
 
 	local ball = ws:FindFirstChild("MatchBall")
 	check(ball ~= nil, "top yok")
 	check(ball.Shape == "PartType.Ball", "top sekli yanlis: " .. tostring(ball.Shape))
 	check(ball.CFrame.pos.X > 0, "top yarim saha icinde baslamiyor")
+end)
+
+test("sutcu NPC yalnizca demo kipinde sahaya kurulur (varsayilan: sutu oyuncu atar)", function()
+	local mock = RobloxMock.install()
+	local ok, err = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+	check(ok, "kurulum calismadi: " .. tostring(err))
+
+	local cfg = require(mock.replicatedStorage.Shared.Config)
+	check(cfg.ANIM.strikerEnabled == false,
+		"varsayilan strikerEnabled false olmali; aksi halde NPC oyuncudan rol calar")
+	local sb = require(mock.replicatedStorage.Shared.World.SceneBuilder)
+
+	cfg.ANIM.strikerEnabled = true
+	sb.build({})
+	local pitch = mock.workspace:FindFirstChild("FootballPitch")
+	local striker = pitch and pitch:FindFirstChild("Striker")
+	check(striker ~= nil, "strikerEnabled=true iken Striker kurulmadi")
+	check(striker:FindFirstChild("Rig") ~= nil, "sutcu iskeleti yok")
+
+	cfg.ANIM.strikerEnabled = false
+	sb.build({})
+	pitch = mock.workspace:FindFirstChild("FootballPitch")
+	check(pitch:FindFirstChild("Striker") == nil, "kapatinca Striker sahneden cikmali")
 end)
 
 test("kurulum tekrar calistirilinca cogaltmiyor (idempotent)", function()
@@ -1015,6 +1042,131 @@ test("sahne agacinda cift kardes adi yok (FindFirstChild belirsiz degil)", funct
 	check(visitedFull > visited, "tam saha agaci yarim sahadan kucuk: " .. tostring(visitedFull))
 	check(#dupFull == 0,
 		"tam sahada ayni adi paylasan kardesler: " .. table.concat(dupFull, ", "))
+end)
+
+test("kaleci dalisi topun gittigi yana yatar (ters yonelmez)", function()
+	-- Dogu kalesi (side=+1): kaleci -X'e bakar, saga uzanmasi dünya -Z demektir.
+	-- Top dünya +Z tarafina gidiyorsa kaleci SOLUNA (yerel -dz) uzanmali ve
+	-- ellerinin dünya z'si POZITIF olmali.
+	local keeper = Keeper.new(Config, 1)
+	local ball = newBall(Vec3.new(35, 1.0, 0.6), Vec3.new(18, 0, 2.4))
+	local dt = Config.FIXED_DT
+	for _ = 1, math.floor(0.6 / dt) do
+		keeper:step(ball, dt)
+		ball:step(dt)
+	end
+	check(keeper.state == "dive", "dalis beklenirdi, gelen " .. tostring(keeper.state))
+	local target = keeper.diveTarget
+	check(target ~= nil, "diveTarget kilitlenmedi")
+	check(target.dz < 0,
+		"yerel dz isareti yanlis: " .. string.format("%.2f", target.dz) .. " (top +Z tarafinda, kaleci sağı -Z)")
+
+	-- Pozu kalecinin dünya yerlesimiyle çöz: eller topun tarafina uzanmali
+	local anim = KeeperAnim.new({ dz = target.dz, height = target.height, speed = target.speed })
+	local solved = Rig.solve(anim:sample(0.45).pose)
+	local yaw = math.atan(0, -1) -- keeperYaw(1)
+	local origin = Vec3.new(keeper.pos.x, 0, keeper.pos.z)
+	local handR = Rig.toWorld(solved.pos.handR, origin, yaw, 1)
+	local handL = Rig.toWorld(solved.pos.handL, origin, yaw, 1)
+	local handsZ = (handR.z + handL.z) / 2
+	check(handsZ > 0.35,
+		"eller topun tersine uzandi: ellerZ=" .. string.format("%.2f", handsZ) .. " m (top +Z tarafinda)")
+	local rootW = Rig.toWorld(solved.pos.root, origin, yaw, 1)
+	check(rootW.z > 0.15,
+		"gövde topun tersine yatti: rootZ=" .. string.format("%.2f", rootW.z))
+end)
+
+test("kaleci dalis yönü bati kalesinde de dogru (side=-1 aynasi)", function()
+	-- Bati kalesi: kaleci +X'e bakar, sağı dünya +Z'si. Top dünya +Z'ye gidiyorsa
+	-- yerel dz POZITIF, ellerin dünya z'si yine pozitif olmali.
+	local keeper = Keeper.new(Config, -1)
+	local ball = newBall(Vec3.new(-35, 1.0, 0.6), Vec3.new(-18, 0, 2.4))
+	local dt = Config.FIXED_DT
+	for _ = 1, math.floor(0.6 / dt) do
+		keeper:step(ball, dt)
+		ball:step(dt)
+	end
+	check(keeper.state == "dive", "dalis beklenirdi, gelen " .. tostring(keeper.state))
+	local target = keeper.diveTarget
+	check(target ~= nil, "diveTarget kilitlenmedi")
+	check(target.dz > 0,
+		"yerel dz isareti yanlis (bati): " .. string.format("%.2f", target.dz))
+	local anim = KeeperAnim.new({ dz = target.dz, height = target.height, speed = target.speed })
+	local solved = Rig.solve(anim:sample(0.45).pose)
+	local yaw = math.atan(0, 1) -- keeperYaw(-1)
+	local origin = Vec3.new(keeper.pos.x, 0, keeper.pos.z)
+	local handR = Rig.toWorld(solved.pos.handR, origin, yaw, 1)
+	local handL = Rig.toWorld(solved.pos.handL, origin, yaw, 1)
+	local handsZ = (handR.z + handL.z) / 2
+	check(handsZ > 0.35,
+		"bati kalesinde eller ters yana: ellerZ=" .. string.format("%.2f", handsZ))
+end)
+
+test("stadyum cevresi kuruluyor: tribun, pano, flama, isik kulesi, gokyuzu", function()
+	local mock = RobloxMock.install()
+	local ok, err = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+	check(ok, "kurulum calismadi: " .. tostring(err))
+
+	local pitch = mock.workspace:FindFirstChild("FootballPitch")
+	check(pitch ~= nil, "FootballPitch yok")
+	local surround = pitch:FindFirstChild("Surround")
+	check(surround ~= nil, "Surround klasoru yok (saha disi bosluk)")
+
+	local function count(prefix)
+		local n = 0
+		for _, child in ipairs(surround:GetChildren()) do
+			if child.Name:sub(1, #prefix) == prefix then
+				n = n + 1
+			end
+		end
+		return n
+	end
+
+	check(surround:FindFirstChild("Apron") ~= nil, "apron yok: saha disi gri bosluk gorunur")
+	check(count("StandNorth") >= 5, "kuzey tribunu eksik: " .. tostring(count("StandNorth")))
+	check(count("StandSouth") >= 5, "guney tribunu eksik: " .. tostring(count("StandSouth")))
+	check(count("StandEast") >= 5, "kale arkasi tribunu eksik: " .. tostring(count("StandEast")))
+	check(count("AdBoard") >= 28, "reklam panolari eksik: " .. tostring(count("AdBoard")))
+	check(count("FlagPole") == 4, "kose flamasi diregi 4 olmali: " .. tostring(count("FlagPole")))
+	local flags = 0
+	for _, child in ipairs(surround:GetChildren()) do
+		-- "FlagNW" say, "FlagPoleNW" sayma (on-ek cakismasi)
+		if child.Name:sub(1, 4) == "Flag" and child.Name:sub(5, 8) ~= "Pole" then
+			flags = flags + 1
+		end
+	end
+	check(flags == 4, "kose flamasi 4 olmali: " .. tostring(flags))
+	check(count("LightPole") == 4, "isik kulesi 4 olmali: " .. tostring(count("LightPole")))
+	check(count("LightHead") == 4, "isik kafasi 4 olmali: " .. tostring(count("LightHead")))
+
+	-- Ceza yayi ("D") Lines klasorunde olmali
+	local lines = pitch:FindFirstChild("Lines")
+	local arc = 0
+	for _, child in ipairs(lines:GetChildren()) do
+		if child.Name:sub(1, 10) == "PenaltyArc" then
+			arc = arc + 1
+		end
+	end
+	check(arc >= 10, "ceza yayi segmentleri eksik: " .. tostring(arc))
+
+	-- Sunum katmani: gokyuzu + altin saat + efektler
+	local Lighting = game:GetService("Lighting")
+	check(Lighting:FindFirstChildOfClass("Sky") ~= nil, "Sky yok: ufuk gri stüdyo boslugu kalir")
+	check(Lighting:FindFirstChildOfClass("SunRaysEffect") ~= nil, "SunRaysEffect yok")
+	check(Lighting:FindFirstChildOfClass("BloomEffect") ~= nil, "BloomEffect yok")
+	check(Lighting:FindFirstChildOfClass("ColorCorrectionEffect") ~= nil, "ColorCorrectionEffect yok")
+	check(Lighting.ClockTime >= 16 and Lighting.ClockTime <= 17.5,
+		"altin saat disinda isik: ClockTime=" .. tostring(Lighting.ClockTime))
+
+	-- Kaleci turuncu formayla ayirt edilmeli
+	local keeperRig = pitch:FindFirstChild("Goalkeeper"):FindFirstChild("Rig")
+	local torso = keeperRig:FindFirstChild("Torso")
+	check(torso ~= nil and torso.Color ~= nil, "kaleci govdesi yok")
+	check(torso.Color.R > 0.8 and torso.Color.G > 0.4 and torso.Color.B < 0.3,
+		"kaleci formasi turuncu degil (sahada secilmiyor)")
 end)
 
 print("\n== 9. Prosedurel animasyon (kod ile, asset yok) ==")
@@ -1264,6 +1416,14 @@ test("sunucu dongusu kurulup 24 s boyunca hatasiz calisiyor", function()
 		chunk()
 	end)
 	check(installOk, "kurulum calismadi: " .. tostring(installErr))
+
+	-- Yeni varsayilan: NPC sutcu kapali (sutu oyuncu atar). Bu test NPC'nin
+	-- yurume/sut animasyonunu da olctugu icin demo kipini BILEREK acar ve sahneyi
+	-- SimLoop calismadan ONCE yeniden kurar (strikerModel acilista baglanir).
+	local liveCfg = require(liveMock.replicatedStorage.Shared.Config)
+	liveCfg.ANIM.strikerEnabled = true
+	local liveSB = require(liveMock.replicatedStorage.Shared.World.SceneBuilder)
+	liveSB.build({})
 
 	local server = liveMock.serverScriptService:FindFirstChild("Server")
 	check(server ~= nil, "Server klasoru yok")
@@ -1686,7 +1846,8 @@ test("SPACE basili tutunca guc bari doluyor", function()
 		"0.45 s'de guc ~0.5 olmaliydi, gelen " .. string.format("%.2f", scale))
 	-- Nisan rengi degismeli (sari)
 	local marker = clientWorld.mock.workspace:FindFirstChild("AimMarker")
-	check(marker.Color.G > 200 and marker.Color.R > 200, "nisan isareti sararmadi (charging gorunumu)")
+	-- Color3 bilesenleri gercek Roblox'taki gibi 0..1: sararma (255,220,90) -> R~1, G~0.86
+	check(marker.Color.G > 0.75 and marker.Color.R > 0.9, "nisan isareti sararmadi (charging gorunumu)")
 end)
 
 test("SPACE birakinca sut istegi sunucuya gidiyor (5 arguman, sinirli degerler)", function()

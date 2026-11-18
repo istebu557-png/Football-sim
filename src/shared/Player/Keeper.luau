@@ -87,7 +87,10 @@ function Keeper:step(ball, dt)
 
 	-- Top kaleye mi geliyor?
 	local towardGoal = ball.vel.x * self.side > 2.5
-	local distanceToLine = (self.side * P.halfLength) - ball.pos.x
+	-- Kale çizgisine kalan mesafe (her iki kale tarafında da pozitif).
+	-- Eski formül ((side * halfLength) - pos.x) side=-1'de NEGATIF oluyordu:
+	-- batı kalesindeki kaleci hiç dalmıyordu (ayna tarafı ölüydü).
+	local distanceToLine = P.halfLength - self.side * ball.pos.x
 
 	local targetZ = 0
 	local wantDive = false
@@ -135,9 +138,15 @@ function Keeper:step(ball, dt)
 
 	if wantDive then
 		if self.state ~= "dive" then
-			-- Dalış başlıyor: animasyon için hedefi kilitle
+			-- Dalış başlıyor: animasyon için hedefi kilitle.
+			-- ÖNEMLİ — eksen dönüşümü: KeeperAnim'in sözleşmesi KALECİNİN KENDİ
+			-- eksenidir ("+dz = kalecinin sağı"). Oysa targetZ - pos.z DÜNYA z farkıdır.
+			-- Kaleci -X'e bakar (side=+1): sağı dünyanın -Z'sidir; +X'e bakar
+			-- (side=-1): sağı dünyanın +Z'si. Dünya farkını olduğu gibi verirsek
+			-- dalış topun TERSİNE yatar (görülen hata buydu). -side çarpanı dünya
+			-- eksenini kalecinin yerel eksenine çevirir.
 			self.diveTarget = {
-				dz = targetZ - self.pos.z,
+				dz = -self.side * (targetZ - self.pos.z),
 				height = (self.arrival and self.arrival.y) or 0.5,
 				speed = ball:speed(),
 				time = (self.arrival and self.arrival.t) or 1,
