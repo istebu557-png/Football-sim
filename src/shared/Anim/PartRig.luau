@@ -158,7 +158,7 @@ function PartRig.apply(model, pose, origin, yaw, studsPerMeter)
 				if Vec3.length(dir) < 1e-6 then
 					part.CFrame = CFrame.new(mid.x, mid.y, mid.z)
 				else
-					part.CFrame = CFrame.new(mid.x, mid.y, mid.z, b.x, b.y, b.z)
+					part.CFrame = CFrame.new(Vector3.new(mid.x, mid.y, mid.z), Vector3.new(b.x, b.y, b.z))
 				end
 			end
 		end
