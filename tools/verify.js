@@ -41,7 +41,7 @@ const BUILD = path.join(ROOT, ".build");
 const PREVIEW = path.join(ROOT, "preview");
 const FENGARI = path.join(ROOT, "node_modules", ".bin", "fengari");
 
-const MIN_TESTS = 137; // spec.luau'daki en az kontrol sayısı (geriye gitmesin)
+const MIN_TESTS = 143; // spec.luau'daki en az kontrol sayısı (geriye gitmesin)
 
 /* ------------------------------------------------------------------ yardımcılar */
 
@@ -274,6 +274,7 @@ const ROBLOX_ENUMS = {
     "Gyro", "None", "TextInput", "InputMethod"]),
   HumanoidRigType: new Set(["R6", "R15"]),
   RenderPriority: new Set(["First", "Input", "Camera", "Character", "Last"]),
+  CameraMode: new Set(["Classic", "LockFirstPerson"]),
   LightType: new Set(["Point", "Spot", "Surface"]),
   CollisionFidelity: new Set(["Default", "Hull", "Box", "PreciseConvexDecomposition"]),
   Technology: new Set(["Legacy", "Voxel", "Compatibility", "ShadowMap", "Future"]),
@@ -342,6 +343,8 @@ const ROBLOX_MEMBERS = new Set([
   "PrimaryPart", "LevelOfDetail", "Scale", "WorldPivot",
   // Humanoid
   "Health", "MaxHealth", "WalkSpeed", "JumpPower", "JumpHeight", "UseJumpPower", "Jump",
+  // LuaSourceContainer: varsayılan `Animate` LocalScript'i kapatılabiliyor
+  "Disabled",
   "PlatformStand", "RigType", "RootPart", "MoveDirection", "State", "StateChanged",
   "Died", "HealthChanged", "AutoRotate", "AutoJumpEnabled", "DisplayName",
   "EvaluateStateMachine", "BreakJointsOnDeath", "HipHeight", "NameOcclusion",
@@ -1506,14 +1509,15 @@ function readmeGate() {
     // Belgelenen tuşlar istemcide var mı?
     const client = modules.find((m) => m.key === "client/BallView");
     if (client) {
-      const keys = { SPACE: "KeyCode.Space", R: "KeyCode.R", T: "KeyCode.T", F: "KeyCode.F", V: "KeyCode.V" };
+      const keys = { SPACE: "KeyCode.Space", R: "KeyCode.R", T: "KeyCode.T", F: "KeyCode.F", V: "KeyCode.V",
+        C: "KeyCode.C" };
       for (const [doc, code] of Object.entries(keys)) {
         const inReadme = new RegExp("\\b" + doc + "\\b").test(readme);
         const inCode = client.source.includes("Enum." + code);
         if (inCode && !inReadme) g.warn("istemci " + doc + " tuşunu kullanıyor ama README'de belgelenmemiş");
         if (!inCode && inReadme) g.error("README " + doc + " tuşunu belgeliyor ama istemcide yok");
       }
-      g.note("tuş belgeleri (SPACE/R/T/F/V) kod ile uyumlu");
+      g.note("tuş belgeleri (SPACE/R/T/F/V/C) kod ile uyumlu");
     }
 
     // verify komutu belgelenmiş mi?

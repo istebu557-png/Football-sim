@@ -16,7 +16,7 @@
  *
  * Hız için her vaka yalnızca ilgili kapıyı koşar (VERIFY_ONLY). Tam kanıt:
  *   npm run verify          → 13/13 kapı
- *   npm run verify:mutate   → 40/40 kusur yakalandı
+ *   npm run verify:mutate   → 46/46 kusur yakalandı
  */
 "use strict";
 
@@ -39,6 +39,7 @@ const F = {
   validate: "src/shared/Core/Validate.luau",
   scene: "src/shared/World/SceneBuilder.luau",
   control: "src/shared/Player/BallControl.luau",
+  pose: "src/shared/Anim/HumanoidPose.luau",
 };
 
 /** [ad, dosyalar, koşulan kapılar, kaynak → kusurlu kaynak] */
@@ -81,7 +82,7 @@ const CASES = [
   ["M15 iz: index.html olmayan alanı okuyor", [F.index], "iz",
     (s) => s.replace("shot.curve", "shot.eğrilikYok")],
   ["M16 belge: README test sayısı bayatladı", [F.readme], "belge",
-    (s) => s.replace("**137 kontrol**", "**99 kontrol**")],
+    (s) => s.replace("**143 kontrol**", "**99 kontrol**")],
   ["M17 önizleme: preview/anim.html silindi", [F.anim], "onizleme",
     () => null], // özel: dosya silinir (aşağıda DELETE olarak ele alınır)
   ["M18 bir spec kontrolü başarısız", [F.spec], "testler",
@@ -145,6 +146,22 @@ const CASES = [
   ["M40 tampon penceresinin kapandığı nedeni boş gönderiliyor", [F.loop], "testler",
     (s) => s.replace('"şut kaçtı: %.2f s içinde topa yetişemedin", Config.BALL_CONTROL.shotBufferTime))',
       '"", Config.BALL_CONTROL.shotBufferTime))')],
+
+  // ---- "1. şahıs + animasyonlar hâlâ çalışmıyor" kusur sınıfı ----
+  ["M41 1. şahıs kilidi açılmıyor (CameraMode Classic kalıyor)", [F.view], "testler",
+    (s) => s.replace("humanoid.CameraMode = Enum.CameraMode.LockFirstPerson",
+      "humanoid.CameraMode = Enum.CameraMode.Classic")],
+  ["M42 1. şahısta istemci kamera CFrame'ini eziyor (Roblox ile yarış)", [F.view], "testler",
+    (s) => s.replace('if cam and camera and cameraMode ~= "first" then', "if cam and camera then")],
+  ["M43 3. şahıs kamerası yine çok uzak (animasyonlar görünmez)", [F.view], "testler",
+    (s) => s.replace("desiredPos = focus + Vector3.new(-8.5, 4.0, 0)",
+      "desiredPos = focus + Vector3.new(-30, 20, 9)")],
+  ["M44 varsayılan Animate kapatılmıyor (prosedürel pozu eziyor)", [F.view], "testler",
+    (s) => s.replace("setDefaultAnimateEnabled(char, not poseOk)", "setDefaultAnimateEnabled(char, true)")],
+  ["M45 R6 desteği kaldırıldı (R6 avatarlarda animasyon hiç yok)", [F.pose], "testler",
+    (s) => s.replace("local alt = findMotors(character, JOINTS_R6)", "local alt = {}")],
+  ["M46 nişan son çaresi silindi (sırtı dönükken şut sessizce yutulur)", [F.view], "testler",
+    (s) => s.replace("return Vector3.new(GOAL_PLANE, 1.0 * S, 0)", "return nil")],
 ];
 
 function read(rel) {
@@ -183,10 +200,24 @@ function main() {
   };
   process.on("exit", restoreAll);
   process.on("SIGINT", () => { restoreAll(); process.exit(130); });
+  // SIGTERM (ör. zaman aşımı ile durdurulan koşu): dosyalar MUTASYONLU kalırsa
+  // sonraki testler yanlış nedenden kırmızıya döner. Geri yüklemeden çıkma.
+  process.on("SIGTERM", () => { restoreAll(); process.exit(143); });
 
-  console.log("=== DOĞRULAYICI MUTASYON TESTİ (" + CASES.length + " kusur) ===\n");
+  // MUTATE_ONLY=M41,M42 → yalnızca seçili kusurları koş (tam koşu ~28 dk).
+  // Filtre AKTİFSE sonuç KISMİ sayılır; kapı için filtresiz tam koşu gerekir.
+  const only = String(process.env.MUTATE_ONLY || "").split(/[\s,]+/)
+    .map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const run = only.length
+    ? CASES.filter(([name]) => {
+      const id = (name.match(/^M\d+/i) || [""])[0].toLowerCase();
+      return only.some((o) => o === id || name.toLowerCase().includes(o));
+    })
+    : CASES;
+
+  console.log("=== DOĞRULAYICI MUTASYON TESTİ (" + run.length + " kusur) ===\n");
   const blind = [];
-  for (const [name, files, gates, mutate] of CASES) {
+  for (const [name, files, gates, mutate] of run) {
     restore.length = 0;
     for (const rel of files) {
       const exists = fs.existsSync(path.join(ROOT, rel));
@@ -229,7 +260,11 @@ function main() {
     console.log("Doğrulayıcı bu kusurları görmüyor: ilgili kapıya denetim ekleyin.");
     process.exit(1);
   }
-  console.log("✓ Doğrulayıcı enjekte edilen " + CASES.length + " kusurun " + CASES.length + " tanesini de yakaladı.");
+  if (run.length !== CASES.length) {
+    console.log("KISMİ KOŞU (MUTATE_ONLY): " + run.length + "/" + CASES.length +
+      " kusur denendi — tam kapı için filtresiz koşun.");
+  }
+  console.log("✓ Doğrulayıcı enjekte edilen " + run.length + " kusurun " + run.length + " tanesini de yakaladı.");
   console.log("  (yeşil doğrulayıcı kör değildir: her kapı kırmızıya dönebiliyor)");
   process.exit(0);
 }

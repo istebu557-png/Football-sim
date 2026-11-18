@@ -27,8 +27,24 @@ herhangi bir yayınlanmış Asset / Animation instance yok.
 | `SPACE` | basılı tut → güç barı dolar, **bırak → şut** (nişan fareyle alınır) |
 | `T` | vuruş türü (plase / düz ayak / drive / ayak dışı) |
 | `F` | ayak değiştir (sol / sağ) |
-| `V` | izleme kipi (oyuncu kamerası ↔ seyirci kamerası) |
+| `C` | kamera kipi değiştir: **1. şahıs ↔ 3. şahıs** |
+| `V` | izleme kipi (topun arkasına geçip kaleyi çerçeveler) |
 | `R` | topu sıfırla |
+
+### Kamera kipleri (varsayılan: **1. şahıs**)
+
+| Kip | Tuş | Davranış |
+|---|---|---|
+| **1. şahıs** (varsayılan) | `C` | Kamerayı **Roblox sürer** (`Humanoid.CameraMode = LockFirstPerson`): baş kilitli, `Head` gizli. İstemci bu kipte kamera `CFrame`'i **yazmaz** — yazsa Roblox ile yarışır ve görüntü titrer. Nişan = karakterin baktığı yön (fare zaten ekranın ortasına kilitli). |
+| 3. şahıs | `C` | Omuz üstü ve **yakın** (karakter ~9.4 stud ötede; eskiden 36 stud → animasyonlar ekranda birkaç pikseldi). Kamera `Scriptable`, istemci sürer. |
+| İzleme | `V` | Topun arkasına geçip kaleyi çerçeveler; adaptif şut + kaleci dalışını izlemek için. |
+
+HUD satırı hangi kipte olduğunu yazar (`C → kamera: 1. şahıs`).
+
+**Nişan asla yutulmaz.** Sıra: (1) fare ışını (3. şahıs/izleme), (2) kamera bakışı,
+(3) karakterin yönü (1. şahıs), (4) **kale ortası**. `computeAim` `nil` dönerse
+`fireKick` hiç `FireServer` çağırmaz ve şut sessizce yutulur — bu yüzden son çare
+her zaman bir nokta üretir (ör. karakterin sırtı kaleye dönükken bile şut çıkar).
 
 **Şut neden çekilemiyordu?** İki sebep vardı, ikisi de kapalı:
 
@@ -65,7 +81,7 @@ yarım saha + kale + ağ + kaleci + top + stadyum çevresi (`Workspace/FootballP
 
 ```bash
 npm run install:build   # kurulum dosyasını src/'den yeniden üret
-npm test                # 137 kontrol + kurulum senkron denetimi
+npm test                # 143 kontrol + kurulum senkron denetimi
 ```
 
 ---
@@ -89,7 +105,7 @@ kırmızıysa çıkış kodu `1` döner. Her kapı kendi alanında kanıt üreti
 | 6 | Kurulum | `install/FootballSim_Install.lua` kaynaklarla **bit-bit senkron**: 26 ModuleScript + 1 Script + 1 LocalScript, sınıf ve kaynak birebir |
 | 7 | Rojo | `default.project.json` `src/`'nin **tamamını** eşliyor; eşlenmemiş tek dosya yok |
 | 8 | Remote + otorite | `Kick` / `ResetBall` / `MatchState` iki tarafta da var; `FireServer` argüman sayısı = `OnServerEvent` parametre sayısı; `MatchState` alanları istemcinin okuduklarını kapsıyor; `InputEnded → fireKick` zinciri kopuk değil; **her `Ballistics.solveLaunch` çıktısı `isFiniteVec3` denetiminden geçiyor** (silinirse kapı düşer) |
-| 9 | Testler | `tools/spec.luau` → **137 kontrol**, 15 grup, 0 başarısız (test sayısı geri giderse ya da bir grup hiç koşmazsa kapı düşer) |
+| 9 | Testler | `tools/spec.luau` → **143 kontrol**, 15 grup, 0 başarısız (test sayısı geri giderse ya da bir grup hiç koşmazsa kapı düşer) |
 | 10 | Fizik izi | `preview/trace.json` üretiliyor; 6 senaryo, 635 yol noktası sonlu; falso > 2 m, direk gol değil, ağ esner ve topu yutar; `index.html`'in okuduğu her alan JSON'da var |
 | 11 | Anim izi | `preview/anim.json` üretiliyor; 16 sahne / 481 kare, her kare eklem sayısıyla uyumlu ve sonlu; `dive/jump/block/jumpDive` kaleci hareketleri mevcut |
 | 12 | Önizleme | `tools/serve.js` gerçekten ayakta: `/`, `/anim.html`, `/trace.json`, `/anim.json` → 200 + doğru `content-type`, olmayan dosya 404, dizin dışı erişim engelli |
@@ -103,15 +119,18 @@ Kapı 4–5 statik taramadır, kapı 9 canlı testtir: ikisi birlikte "kod Roblo
 Yeşil bir doğrulayıcı, ancak kırmızıya dönebiliyorsa kanıttır:
 
 ```bash
-npm run verify:mutate
+npm run verify:mutate                          # 46 kusurun tamamı (~28 dk)
+MUTATE_ONLY=M41,M44 npm run verify:mutate      # yalnızca seçili kusurlar (kısmi koşu)
 ```
 
-`tools/verify_mutations.js` koda **26 bilinçli kusur** enjekte eder (sözdizimi
+`tools/verify_mutations.js` koda **46 bilinçli kusur** enjekte eder (sözdizimi
 hatası, `Enum.KeyCode.Spacee`, uydurma servis/sınıf, `.Perent`, sunucuda
 `Players.LocalPlayer`, silinmiş rojo eşlemesi, yanlış remote adı, eksik
 `FireServer` argümanı, kopmuş `InputEnded`, silinmiş `isFiniteVec3` koruması,
 var olmayan modül fonksiyonu, kesilmiş fare nişanı, geri gelmiş çift kardeş adı,
-bayat README sayısı…) ve her birinin ilgili kapıyı düşürdüğünü doğrular; biri
+bayat README sayısı, açılmamış 1. şahıs kilidi, 1. şahısta kamerayı ezen istemci,
+yeniden çok uzağa alınmış 3. şahıs kamerası, kapatılmamış varsayılan `Animate`,
+silinmiş R6 desteği, nişanı `nil` kalan şut…) ve her birinin ilgili kapıyı düşürdüğünü doğrular; biri
 yeşil kalırsa araç `✗ KÖR NOKTA` yazıp 1 döner. Her turdan sonra dosyalar
 birebir geri yüklenir.
 
@@ -257,7 +276,7 @@ fırlatmaz. Model:
 
 ## Ölçülen davranışlar
 
-`npm test` → **137 kontrol**. Öne çıkanlar:
+`npm test` → **143 kontrol**. Öne çıkanlar:
 
 | Ölçüm | Motor | Gerçek dünya |
 |---|---|---|
@@ -314,6 +333,15 @@ simülasyonun kaydıdır; `preview/` bir oyun değil doğrulama aracıdır.
 
 - **Adaptif şut**: `ballHeight` → yerden / yarım vole / vole / sol ayak; `charge` → şut gücü ve kalça bükülmesi; temas anında top ayrılır (`KickAnim.CONTACT_TIME = 0.24 s`, `DURATION = 0.62 s`).
 - **Adaptif kaleci**: topun kaleye varış noktası (`dz`) ve yüksekliği hareketi seçer — blok (`dz < 0.5`) / dalış (`dz ≥ 0.5`) / zıplama (`height ≥ 1.45`); yüksek+yan şutta `jumpDive`. El uzanma `0.38–2.30 m`.
+- **Varsayılan Roblox animasyonu pozu EZMİYOR**: karakterdeki `Animate`
+  LocalScript'i her karede `Motor6D.Transform`'a kendi pozunu yazar; bu yüzden
+  Studio'da "animasyonlar çalışmıyor" görünüyordu. Pozlama gerçekten
+  çalışıyorsa (`HumanoidPose.supported`) `Animate` **kapatılır**; çalışmıyorsa
+  (eklem bulunamadı) **açık bırakılır** ki karakter heykele dönmesin.
+  `Config.ANIM.poseHumanoid = false` tüm prosedürel pozu kapatır (kaçış kapağı).
+- **R15 + R6**: R15'te 12 eklem (bel/diz/dirsek dahil), R6'da 5 eklem
+  (`Neck`, `Left/Right Shoulder`, `Left/Right Hip`) sürülür. Eski kod R6
+  avatarlarda sessizce hiçbir şey yapmıyordu.
 - **Oynayan oyuncu sürekli animasyonlu**: karakter yalnızca şut sırasında değil,
   **her karede** pozlanır — koşarken adım döngüsü, dururken nefes alan bekleyiş.
   Poz hem sunucuda (`SimLoop` adım 3b, `Config.ANIM.poseHumanoid`) hem istemcide
@@ -332,7 +360,7 @@ npm run preview # http://localhost:8080/anim.html
 
 `preview/anim.html` canvas ile yandan/önden görünüm, oynat/duraklat, zaman çubuğu, temas anı işareti, kemik çizimi ve top işareti sunar. Kaynak: `tools/anim_trace.luau` (11 şut + 5 kaleci sahnesi = 16, `contact` ve `bayrak` alanları ile).
 
-Test: `tools/spec.luau` → **137/137** (8. grup kaleci + kurulum + sahne ağacı + stadyum çevresi, 9. grup anim, 10. grup canlı döngü + şutçu, 11. grup istemci/E2E, 12. grup girdi sertleştirme, 13. grup `Validate` birim testleri, 14. grup fare → nişan).
+Test: `tools/spec.luau` → **143/143** (8. grup kaleci + kurulum + sahne ağacı + stadyum çevresi, 9. grup anim, 10. grup canlı döngü + şutçu, 11. grup istemci/E2E, 12. grup girdi sertleştirme, 13. grup `Validate` birim testleri, 14. grup fare → nişan).
 
 ### Rojo ile (alternatif)
 
@@ -355,7 +383,7 @@ rojo build -o FootballSim.rbxlx
 - [ ] **Adım 6** — 11v11: diziliş, takım AI'sı, baskı, ofansif/defansif geçiş.
 - [ ] **Adım 7** — Ağ: istemci tahmini, gecikme telafisi, bant bütçesi.
 - [ ] **Adım 8** — Sunum: animasyonlar, kamera modları, UI, ses.
-      *Animasyon alt-adımı (şut + kaleci + oyuncu yürüyüşü/duruşu): kodla, FK, testli (137/137). Kamera modu (V izleme) ve HUD (ipucu/güç barı/skor) tamam; ses bekliyor.*
+      *Animasyon alt-adımı (şut + kaleci + oyuncu yürüyüşü/duruşu): kodla, FK, testli (143/143). Kamera modu (V izleme) ve HUD (ipucu/güç barı/skor) tamam; ses bekliyor.*
 
 ---
 
@@ -371,8 +399,10 @@ rojo build -o FootballSim.rbxlx
 - **Drag crisis yumuşak geçişle yaklaşımlanır**; gerçek Knuckleball histerezis
   gösterir.
 - **Animasyon şut + kaleci + yürüyüş/duruş** ile sınırlı (tek bir şutçu, tek bir
-  kaleci); top sürme/çalım/ikili mücadele animasyonu ve geçiş akışı yok. Pozlar
-  Roblox'un varsayılan `Animate` script'iyle aynı eklemlere yazdığı için görsel
-  öncelik bizim pozumuzdadır; istemeyen `Config.ANIM.poseHumanoid = false` ile
-  kapatıp varsayılan animasyonlara dönebilir. Kamera modu (V izleme) ve UI
-  istemci tarafındadır.
+  kaleci); top sürme/çalım/ikili mücadele animasyonu ve geçiş akışı yok.
+- **1. şahısta kendi gövdeni göremezsin** (Roblox `Head`'i gizler): aşağı
+  bakınca bacaklar görünür, kendi animasyonunu izlemek için `C` ile 3. şahsa geç.
+- **R6'da poz kaba** (diz/dirsek/bel yok): omuz + kalça + boyun sürülür.
+- Prosedürel poz açıkken karakterin varsayılan `Animate` script'i kapalıdır
+  (yoksa pozu ezer); `Config.ANIM.poseHumanoid = false` ile tümüyle kapanır.
+  Kamera kipleri (1./3. şahıs, izleme) ve UI istemci tarafındadır.

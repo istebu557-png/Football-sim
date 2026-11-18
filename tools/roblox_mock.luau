@@ -1063,6 +1063,13 @@ function Mock.install()
 		local humanoid = makeClass("Humanoid", "Humanoid")
 		humanoid.RigType = "R15" -- HumanoidPose yalnız Motor6D adlarına bakar
 		humanoid.Parent = model
+		-- Gerçek karakterde Roblox'un varsayılan animasyon LocalScript'i vardır
+		-- ve her karede Motor6D.Transform'a KENDİ pozunu yazar. İstemci prosedürel
+		-- pozlama çalışıyorsa onu kapatmalı; bu davranış test edilebilsin diye
+		-- mock karakter de aynı script'i taşır.
+		local animate = makeClass("LocalScript", "Animate")
+		animate.Disabled = false
+		animate.Parent = model
 		-- R15 eklem Motor6D'leri: gerçek karakterde HumanoidPose bunların
 		-- Transform'una yazar. Mock'ta yoksa poz kodu sessizce atlanır ve
 		-- "animasyon gerçekten uygulanıyor mu" test edilemez.

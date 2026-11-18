@@ -1490,6 +1490,65 @@ test("PlayerPose pozlari R15 karakterine uygulanabiliyor (animasyon gercekten ya
 	check(cleared ~= nil, "clear sonrasi Transform okunamiyor")
 end)
 
+-- Studio'daki avatar R15 olmak zorunda değil: R6'da eklem adları farklıdır
+-- ("Left Hip", "Neck" ...) ve bel/diz/dirsek yoktur. Eski kod R6'da SESSİZCE
+-- hiçbir şey yapmıyordu -> "animasyonlar çalışmıyor" şikayetinin bir nedeni daha.
+test("HumanoidPose R6 karakterde de calisiyor (avatar R15 degilse de animasyon var)", function()
+	local mockEnv = RobloxMock.install()
+	local HP = __load("shared/Anim/HumanoidPose")
+	local identity = { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }
+	local function movedFrom(comps)
+		if not comps then
+			return -1
+		end
+		local moved = 0
+		for i = 1, 12 do
+			if math.abs(comps[i] - identity[i]) > 1e-9 then
+				moved = moved + 1
+			end
+		end
+		return moved
+	end
+
+	local r6 = Instance.new("Model")
+	r6.Name = "R6Tester"
+	r6.Parent = mockEnv.workspace
+	for _, name in ipairs({ "Neck", "Left Shoulder", "Right Shoulder", "Left Hip", "Right Hip" }) do
+		local motor = Instance.new("Motor6D")
+		motor.Name = name
+		motor.Transform = CFrame.new()
+		motor.Parent = r6
+	end
+	check(HP.supported(r6), "R6 eklem adlari taninmadi: R6 avatarlarda animasyon hic calismaz")
+	check(HP.apply(r6, PlayerPose.walk(0.25, 5.5)), "R6 apply false dondu")
+	check(movedFrom({ r6:FindFirstChild("Right Hip").Transform:GetComponents() }) > 0,
+		"R6 kalca eklemi yazilmadi")
+	check(movedFrom({ r6:FindFirstChild("Left Shoulder").Transform:GetComponents() }) > 0,
+		"R6 omuz eklemi yazilmadi")
+
+	-- Regresyon: R15 hâlâ tam çözünürlükte çalışıyor (12 eklem)
+	local r15 = Instance.new("Model")
+	r15.Name = "R15Tester2"
+	r15.Parent = mockEnv.workspace
+	for _, name in ipairs({ "Waist", "Neck", "LeftHip", "LeftKnee", "LeftAnkle", "RightHip",
+		"RightKnee", "RightAnkle", "LeftShoulder", "LeftElbow", "RightShoulder", "RightElbow" }) do
+		local motor = Instance.new("Motor6D")
+		motor.Name = name
+		motor.Transform = CFrame.new()
+		motor.Parent = r15
+	end
+	check(HP.supported(r15), "R15 desteklenmiyor sayildi (regresyon)")
+	HP.apply(r15, PlayerPose.walk(0.25, 5.5))
+	check(movedFrom({ r15:FindFirstChild("LeftKnee").Transform:GetComponents() }) > 0,
+		"R15 diz eklemi yazilmadi (R6 yoluna dusmus olabilir)")
+
+	-- Eklemi hiç olmayan model desteklenmemeli (sessizce false)
+	local empty = Instance.new("Model")
+	empty.Name = "NoJoints"
+	empty.Parent = mockEnv.workspace
+	check(not HP.supported(empty), "eklemi olmayan model destekleniyor sayildi")
+end)
+
 test("kaleci bosta heykel degil: nefes + salinim animasyonu var", function()
 	local a = KeeperAnim.idle(0.0)
 	local b = KeeperAnim.idle(1.3)
@@ -1789,6 +1848,13 @@ local function bootWorld(opts)
 		sharedConfig.ANIM.strikerEnabled = false
 	end
 
+	-- Prosedürel pozlamayı kapat (Config.ANIM.poseHumanoid = false kaçış kapağı).
+	-- BallView bu bayrağı YÜKLENİRKEN okuduğu için istemciden önce değişmeli.
+	if opts.poseHumanoid == false then
+		local sharedConfig = require(mock.replicatedStorage.Shared.Config)
+		sharedConfig.ANIM.poseHumanoid = false
+	end
+
 	local okClient, errClient = true, nil
 	if opts.client ~= false then
 		local clientFolder = mock.starterPlayerScripts:FindFirstChild("Client")
@@ -1957,12 +2023,53 @@ test("istemci HUD + top kopyasi + nisan isareti kuruyor, sunucu topunu gizliyor"
 	check(ballCount == 1, "MatchBall cogaldi: " .. tostring(ballCount))
 end)
 
-test("kamera karakterin arkasinda, kaleye bakiyor ve Scriptable", function()
-	local mock = clientWorld.mock
+-- Kullanıcı isteği: oyuncu 1. ŞAHIS olsun. Bu kipte kamerayı Roblox sürer
+-- (Humanoid.CameraMode = LockFirstPerson başı kilitler, Head'i gizler); istemci
+-- CFrame YAZMAMALI, yoksa Roblox ile yarışır ve görüntü titrer.
+test("kamera varsayilan olarak 1. sahis: Roblox surer, istemci CFrame yazmaz", function()
+	local res = stepWorld(clientWorld, 1.0)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(clientWorld.humanoid ~= nil, "world.humanoid yok")
+	check(clientWorld.humanoid.CameraMode == "CameraMode.LockFirstPerson",
+		"1. sahis kilidi acilmadi (Humanoid.CameraMode): " .. tostring(clientWorld.humanoid.CameraMode))
+	check(clientWorld.camera.CameraType == "CameraType.Custom",
+		"1. sahista CameraType Custom olmali (kamerayi Roblox surer): " ..
+		tostring(clientWorld.camera.CameraType))
+	-- Nişan 1. şahısta karakterin baktığı yöndür ve yine kale düzlemine düşer
+	local marker = clientWorld.mock.workspace:FindFirstChild("AimMarker")
+	check(marker ~= nil, "workspace.AimMarker yok")
+	local mp = marker.Position
+	local goalPlane = 52.5 * STUDS_PER_METER
+	check(math.abs(mp.X - goalPlane) < 0.5,
+		"1. sahista nisan kale duzleminde degil: x=" .. string.format("%.1f", mp.X))
+	check(math.abs(mp.Z) <= 3.3 * STUDS_PER_METER + 0.01, "nisan z siniri asildi")
+	check(mp.Y >= 0.25 * STUDS_PER_METER - 0.01 and mp.Y <= 2.3 * STUDS_PER_METER + 0.01,
+		"nisan y siniri asildi")
+	check(marker.Transparency < 1, "1. sahista nisan yok sayildi (computeAim nil dondu)")
+	-- HUD hangi kipte olduğumuzu söylemeli
+	local text = hintText(clientWorld)
+	check(text:find("1. şahıs", 1, true) ~= nil, "HUD kamera kipini gostermiyor: " .. tostring(text))
+
+	-- 1. şahısta istemci kameraya DOKUNMAMALI: Roblox'un baş-kilitli kamerasını
+	-- her karede ezmek görüntüyü titretir (ve ilk şahıs hissiyi bozar).
+	clientWorld.camera.CFrame = CFrame.lookAt(Vector3.new(1234, 567, 89), Vector3.new(2000, 567, 89))
+	stepWorld(clientWorld, 0.3)
+	local kept = clientWorld.camera.CFrame.Position
+	check(math.abs(kept.X - 1234) < 1e-6, string.format(
+		"1. sahista istemci kamera CFrame'ini ezdi (x=%.1f, beklenen 1234): Roblox'un kamerasiyla yarisir",
+		kept.X))
+end)
+
+-- Animasyonların "çalışmıyor" gibi görünmesinin bir nedeni de kameranın 30 stud
+-- geride / 20 stud yukarıda olmasıydı: karakter ekranda birkaç piksel kalıyordu.
+test("C ile 3. sahisa geciliyor: kamera omuz ustunde ve YAKIN (animasyon gorunur)", function()
+	clientWorld.mock.pressKey("C")
 	local res = stepWorld(clientWorld, 1.0)
 	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
 	check(clientWorld.camera.CameraType == "CameraType.Scriptable",
-		"CameraType Scriptable degil: " .. tostring(clientWorld.camera.CameraType))
+		"3. sahista CameraType Scriptable degil: " .. tostring(clientWorld.camera.CameraType))
+	check(clientWorld.humanoid.CameraMode == "CameraMode.Classic",
+		"3. sahista CameraMode Classic degil: " .. tostring(clientWorld.humanoid.CameraMode))
 	local camPos = clientWorld.camera.CFrame.Position
 	local hrpPos = clientWorld.hrp.Position
 	check(camPos.X < hrpPos.X, "kamera karakterin onunde (x=" .. string.format("%.1f", camPos.X) .. ")")
@@ -1970,25 +2077,107 @@ test("kamera karakterin arkasinda, kaleye bakiyor ve Scriptable", function()
 	check(clientWorld.camera.CFrame.LookVector.X > 0.2,
 		"kamera kaleye (+x) bakmiyor: LookVector.X=" ..
 		string.format("%.2f", clientWorld.camera.CFrame.LookVector.X))
-	-- Nisan isareti kale duzleminde olmali
-	local marker = mock.workspace:FindFirstChild("AimMarker")
-	local mp = marker.Position
-	local goalPlane = 52.5 * STUDS_PER_METER
-	check(math.abs(mp.X - goalPlane) < 0.5,
-		"nisan isareti kale duzleminde degil: x=" .. string.format("%.1f", mp.X))
-	check(math.abs(mp.Z) <= 3.3 * STUDS_PER_METER + 0.01, "nisan z siniri asildi: " .. string.format("%.1f", mp.Z))
-	check(mp.Y >= 0.25 * STUDS_PER_METER - 0.01 and mp.Y <= 2.3 * STUDS_PER_METER + 0.01,
-		"nisan y siniri asildi: " .. string.format("%.1f", mp.Y))
-	check(marker.Transparency < 1, "nisan isareti gorunmez (hesaplama nil dondu)")
+	-- YAKINLIK: karakter ekranda görünür büyüklükte olmalı
+	local dx, dy, dz = camPos.X - hrpPos.X, camPos.Y - hrpPos.Y, camPos.Z - hrpPos.Z
+	local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+	check(dist < 14.0, string.format(
+		"3. sahis kamerasi cok uzak: karakter %.1f stud otede (animasyonlar gorunmez, eski hata 36 stud)", dist))
+	check(dist > 3.0, string.format("3. sahis kamerasi karakterin icinde: %.1f stud", dist))
+	local text = hintText(clientWorld)
+	check(text:find("3. şahıs", 1, true) ~= nil, "HUD 3. sahis kipini gostermiyor: " .. tostring(text))
+
+	clientWorld.mock.pressKey("C") -- geri al
+	stepWorld(clientWorld, 0.3)
+	check(clientWorld.camera.CameraType == "CameraType.Custom",
+		"C ikinci basinca 1. sahisa geri donmedi: " .. tostring(clientWorld.camera.CameraType))
+	check(clientWorld.humanoid.CameraMode == "CameraMode.LockFirstPerson",
+		"1. sahis kilidi geri gelmedi")
 end)
 
-test("istemci kopyasi sunucu topunu izliyor (yumusatma yakinsiyor)", function()
-	local visual = clientWorld.mock.workspace:FindFirstChild("MatchBallVisual")
-	local res = stepWorld(clientWorld, 1.0)
+-- Roblox'un varsayılan `Animate` LocalScript'i her karede Motor6D.Transform'a
+-- kendi pozunu yazar; bizim prosedürel pozumuzu EZER. Studio'da "animasyonlar
+-- çalışmıyor" görünmesinin asıl nedeni bu. Pozlama çalışıyorsa varsayılan
+-- kapatılır; çalışmıyorsa AÇIK KALIR (karakter heykele dönmesin).
+test("prosedurel poz calisirken varsayilan Animate kapatiliyor (yoksa pozu eziyor)", function()
+	local w = bootWorld({ striker = false })
+	check(w.installOk and w.serverOk and w.clientOk,
+		"dunya kurulamadi: " .. tostring(w.installErr or w.serverErr or w.clientErr))
+	local char = w.mock.localPlayer.Character
+	local animate = char:FindFirstChild("Animate")
+	check(animate ~= nil, "mock karakterde Animate LocalScript yok (test zemini hazir degil)")
+	-- Not: BallView yüklenirken bindCharacter çalıştığı için başlangıç durumu
+	-- zaten "kapalı"dır; ölçülen şey kareler boyunca kapalı KALMASI.
+
+	local res = stepWorld(w, 0.3)
 	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
-	local d = visual.Position - clientWorld.ball.Position
-	local dist = math.sqrt(d.X * d.X + d.Y * d.Y + d.Z * d.Z)
-	check(dist < 1.0, "kopya sunucu topuna yakinsamadi: " .. string.format("%.2f stud", dist))
+	check(animate.Disabled == true,
+		"prosedurel poz calisirken Animate kapatilmadi: Roblox kendi pozunu yazip bizimkini ezer (animasyon gorunmez)")
+
+	-- Kapatmak yetmez: eklemler gerçekten yazılıyor olmalı
+	local knee = char:FindFirstChild("LeftKnee")
+	check(knee ~= nil, "LeftKnee eklemi yok")
+	local identity = { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }
+	local comps = { knee.Transform:GetComponents() }
+	local moved = 0
+	for i = 1, 12 do
+		if math.abs(comps[i] - identity[i]) > 1e-9 then
+			moved = moved + 1
+		end
+	end
+	check(moved > 0, "Animate kapatildi ama diz eklemi kimlikte kaldi: poz yazilmiyor")
+end)
+
+test("pozlanamayan karakterde varsayilan animasyon ACIK kaliyor (heykel olmasin)", function()
+	local w = bootWorld({ striker = false })
+	check(w.clientOk, "istemci calismadi: " .. tostring(w.clientErr))
+	local original = w.mock.localPlayer.Character
+
+	-- Eklemleri OLMAYAN bir karakter (ör. özel rig): pozlama çalışamaz
+	local char = Instance.new("Model")
+	char.Name = "NoJointsChar"
+	local root = Instance.new("Part")
+	root.Name = "HumanoidRootPart"
+	root.Size = Vector3.new(2, 2, 1)
+	root.CFrame = CFrame.new(0, 3, 0) -- mock'ta Position CFrame'den türer
+	root.Parent = char
+	local hum = Instance.new("Humanoid")
+	hum.Parent = char
+	local animate = Instance.new("LocalScript")
+	animate.Name = "Animate"
+	animate.Disabled = false
+	animate.Parent = char
+	char.Parent = w.mock.workspace
+
+	w.mock.localPlayer.CharacterAdded:Fire(char)
+	local res = stepWorld(w, 0.25)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(animate.Disabled == false,
+		"pozlanamayan karakterde Animate kapatildi -> karakter T-pozda heykel gibi kalir")
+
+	-- Dünyayı bozmadan geri al
+	w.mock.localPlayer.CharacterAdded:Fire(original)
+	stepWorld(w, 0.2)
+end)
+
+test("poseHumanoid=false kacis kapagi: ne poz yazilir ne Animate kapatilir", function()
+	local w = bootWorld({ striker = false, poseHumanoid = false })
+	check(w.installOk and w.serverOk and w.clientOk,
+		"dunya kurulamadi: " .. tostring(w.installErr or w.serverErr or w.clientErr))
+	local char = w.mock.localPlayer.Character
+	local animate = char:FindFirstChild("Animate")
+	local res = stepWorld(w, 0.4)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(animate.Disabled == false,
+		"poseHumanoid=false iken Animate kapatildi: oyuncu Roblox animasyonundan da olur")
+	local identity = { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }
+	local comps = { char:FindFirstChild("LeftKnee").Transform:GetComponents() }
+	local moved = 0
+	for i = 1, 12 do
+		if math.abs(comps[i] - identity[i]) > 1e-9 then
+			moved = moved + 1
+		end
+	end
+	check(moved == 0, "poseHumanoid=false iken eklem yazilmaya devam ediyor (bayrak dinlenmiyor)")
 end)
 
 test("V izleme kipi kamerayi topun arkasina aliyor", function()
@@ -2874,6 +3063,10 @@ test("fare ekrani nisana bagli: AimMarker fareyle birlikte kayiyor", function()
 	check(aimWorld.installOk and aimWorld.serverOk and aimWorld.clientOk,
 		"dunya kurulamadi: " .. tostring(aimWorld.installErr or aimWorld.serverErr or aimWorld.clientErr))
 	placePlayerAtBall(aimWorld, 0.8)
+	-- Fare nişanı 3. şahıs/izleme kipinde anlamlıdır: 1. şahısta fare ekranın
+	-- ortasına kilitlidir ve nişan karakterin baktığı yöndür (bkz. sonraki test).
+	aimWorld.mock.pressKey("C") -- 1. sahis -> 3. sahis
+	stepWorld(aimWorld, 0.1)
 
 	local marker = aimWorld.mock.workspace:FindFirstChild("AimMarker")
 	check(marker ~= nil, "workspace.AimMarker yok (nisan gostergesi hic kurulmamis)")
@@ -2929,6 +3122,82 @@ test("asiri fare konumu sutu yutmuyor (kamera bakisina duser, sut yine atilir)",
 		"kose nisaninda sut atilmadi (launch " .. tostring(res.launches) .. ") -> nisan sessizce yutuluyor")
 	check(res.maxSpeed > 20, "sut hizi dusuk: " .. string.format("%.1f m/s", res.maxSpeed))
 	check(attacker ~= nil, "saldirgan kurulamadi")
+end)
+
+-- 1. ŞAHISTA nişan karakterin baktığı yöndür (fare ekranın ortasına kilitlidir).
+-- Ayrıca hiçbir ışın kaleyi önden kesmese bile nişan kale ortasına düşer; şut
+-- SESSİZCE YUTULMAZ (computeAim nil dönerse fireKick hiç FireServer çağırmaz).
+test("1. sahista nisan karakterin baktigi yone bagli ve sut yutulmuyor", function()
+	local w = bootWorld({ striker = false })
+	check(w.installOk and w.serverOk and w.clientOk,
+		"dunya kurulamadi: " .. tostring(w.installErr or w.serverErr or w.clientErr))
+	local settled = settleBall(w)
+	check(#settled.errors == 0, "top oturtulurken hata: " .. table.concat(settled.errors, " | "))
+	placePlayerAtBall(w, 0.8)
+	local marker = w.mock.workspace:FindFirstChild("AimMarker")
+	check(marker ~= nil, "workspace.AimMarker yok")
+
+	-- Fare bilerek köşede: 1. şahısta nişanı DEĞİŞTİRMEMELİ
+	w.mock.setMouseLocation(1, 1)
+	local s1 = stepWorld(w, 0.2)
+	check(#s1.errors == 0, "kareler hata verdi: " .. table.concat(s1.errors, " | "))
+	check(marker.Transparency < 1, "1. sahista nisan yok sayildi (computeAim nil dondu)")
+	local straight = marker.CFrame.Position
+	check(math.abs(straight.X - 52.5 * STUDS_PER_METER) < 0.5,
+		"1. sahista nisan kale duzleminde degil: x=" .. string.format("%.1f", straight.X))
+
+	w.mock.setMouseLocation(1200, 900)
+	stepWorld(w, 0.2)
+	local straight2 = marker.CFrame.Position
+	check(math.abs(straight2.Z - straight.Z) < 0.05 and math.abs(straight2.Y - straight.Y) < 0.05,
+		"1. sahista fare konumu nisani degistirdi (fare ortada kilitli olmali): " ..
+		string.format("%.2f -> %.2f", straight.Z, straight2.Z))
+
+	-- Karakteri sola çevir: nişan da kaymalı
+	local pos = w.hrp.Position
+	w.hrp.CFrame = CFrame.lookAt(pos, pos + Vector3.new(10, 0, -6))
+	stepWorld(w, 0.25)
+	local turned = marker.CFrame.Position
+	check(math.abs(turned.Z - straight.Z) > 0.5, string.format(
+		"1. sahista karakter donunce nisan kaymadi: straightZ=%.2f turnedZ=%.2f", straight.Z, turned.Z))
+	check(turned.Z < straight.Z, "sola donus nisani +z yonune kaydirdi (ters baglanmis)")
+
+	-- Şut çıkmalı
+	w.mock.pressKey("Space")
+	local charge = stepWorld(w, 1.0)
+	check(#charge.errors == 0, "guc toplarken hata: " .. table.concat(charge.errors, " | "))
+	w.mock.releaseKey("Space")
+	local res = stepWorld(w, 1.2)
+	check(#res.errors == 0, "sut sirasinda hata: " .. table.concat(res.errors, " | "))
+	check(res.launches >= 1,
+		"1. sahista sut atilmadi (launch " .. tostring(res.launches) .. ") -> nisan sessizce yutuluyor")
+end)
+
+-- Karakterin sırtı kaleye dönükken bile şut çıkmalı: hiçbir ışın kale düzlemini
+-- önden kesmez; nişan kale ortasına düşer (eski kodda computeAim nil döner,
+-- fireKick hiç FireServer çağırmaz ve şut SESSİZCE yutulurdu).
+test("kaleye sirti donukken bile sut atiliyor (nisan kale ortasina duser)", function()
+	local w = bootWorld({ striker = false })
+	check(w.installOk and w.serverOk and w.clientOk, "dunya kurulamadi")
+	local settled = settleBall(w)
+	check(#settled.errors == 0, "top oturtulurken hata: " .. table.concat(settled.errors, " | "))
+	placePlayerAtBall(w, 0.8)
+	-- Karakter -x yönüne baksın (kaleye sırtı dönük)
+	local bp = w.ball.Position
+	local pos = Vector3.new(bp.X - 0.8 * STUDS_PER_METER, bp.Y, bp.Z)
+	w.hrp.CFrame = CFrame.lookAt(pos, pos + Vector3.new(-10, 0, 0))
+	w.hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	stepWorld(w, 0.2)
+	local marker = w.mock.workspace:FindFirstChild("AimMarker")
+	check(marker.Transparency < 1, "sirti donuk karakterde nisan yok sayildi (sut yutulacak)")
+
+	w.mock.pressKey("Space")
+	stepWorld(w, 1.0)
+	w.mock.releaseKey("Space")
+	local res = stepWorld(w, 1.2)
+	check(#res.errors == 0, "sut sirasinda hata: " .. table.concat(res.errors, " | "))
+	check(res.launches >= 1,
+		"kaleye sirti donukken sut atilmadi (launch " .. tostring(res.launches) .. ")")
 end)
 
 print("  GECEN: " .. tostring(passed) .. "   BASARISIZ: " .. tostring(failed))

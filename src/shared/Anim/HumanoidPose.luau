@@ -11,7 +11,9 @@
 		Roblox karakteri: +x sağ, +y yukarı, -z ileri (LookVector = -Z)
 		Ayna dönüşümü olduğu için Euler işaretleri: (x, y, z) -> (-x, -y, +z)
 
-	Bu modül yalnızca R15 karakterlerde çalışır (R6'da sessizce hiçbir şey yapmaz).
+	R15 karakterlerde 12 eklem, R6 karakterlerde 5 eklem (omuz/kalça/boyun)
+	sürülür; ikisi de yoksa sessizce hiçbir şey yapmaz (karakter donmaz, Roblox'un
+	varsayılan animasyonu çalışmaya devam eder).
 	Karakterin kendi Animate script'i de Transform yazdığı için görsel çakışma
 	olabilir: Config.ANIM.poseHumanoid = false ile kapatılabilir.
 ]]
@@ -34,31 +36,62 @@ local JOINTS = {
 	{ motor = "RightElbow", joint = "elbowR" },
 }
 
--- karakter -> { {motor, joint} ... } (zayıf önbellek)
+-- R6 karakterlerde eklem adları FARKLIDIR: bel/diz/dirsek yoktur, omuz ve kalça
+-- motorları Torso'nun içinde ve adlarında boşluk vardır ("Left Shoulder").
+-- R6 avatarlarda poz hiç uygulanamıyordu -> karakter donmuş görünüyordu.
+-- Bu eşlemeyle omuz + kalça + boyun yine sürülür (kaba ama görünür hareket).
+local JOINTS_R6 = {
+	{ motor = "Neck", joint = "neck" },
+	{ motor = "Left Shoulder", joint = "shoulderL" },
+	{ motor = "Right Shoulder", joint = "shoulderR" },
+	{ motor = "Left Hip", joint = "hipL" },
+	{ motor = "Right Hip", joint = "hipR" },
+}
+
+local R15_MIN_JOINTS = 8
+local R6_MIN_JOINTS = 4
+
+-- karakter -> { {motor, joint} ... } (zayıf önbellek; yalnız BAŞARILI sonuç
+-- önbelleğe alınır, karakter hâlâ yükleniyorsa sonraki karede yeniden denenir)
 local cache = setmetatable({}, { __mode = "k" })
 
-local function collect(character)
-	local found = cache[character]
-	if found then
-		return found
-	end
-	found = {}
-	for _, map in ipairs(JOINTS) do
+local function findMotors(character, maps)
+	local found = {}
+	for _, map in ipairs(maps) do
 		local motor = character:FindFirstChild(map.motor, true)
 		if motor and motor:IsA("Motor6D") then
 			found[#found + 1] = { motor = motor, joint = map.joint }
 		end
 	end
-	cache[character] = found
 	return found
 end
 
---[[ Karakterin R15 eklemleri var mı? (yoksa sessizce false) ]]
+local function collect(character)
+	local cached = cache[character]
+	if cached then
+		return cached
+	end
+	local found = findMotors(character, JOINTS)
+	if #found >= R15_MIN_JOINTS then
+		cache[character] = found
+		return found
+	end
+	-- R15 değil (ya da eksik): R6 adlarıyla dene
+	local alt = findMotors(character, JOINTS_R6)
+	if #alt >= R6_MIN_JOINTS then
+		cache[character] = alt
+		return alt
+	end
+	return found -- yetersiz: supported() false der, önbelleğe alınmaz
+end
+
+--[[ Karakterin pozlanabilir eklemleri var mı? (R15 ya da R6; yoksa false) ]]
 function HumanoidPose.supported(character)
 	if not character then
 		return false
 	end
-	return #collect(character) >= 8
+	local found = collect(character)
+	return #found >= R6_MIN_JOINTS
 end
 
 local function anglesFor(pose, jointName)
