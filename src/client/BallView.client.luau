@@ -36,6 +36,11 @@ local PITCH = Config and Config.PITCH
 local HALF_LENGTH = PITCH and PITCH.halfLength or 52.5
 local GOAL_PLANE = HALF_LENGTH * S
 local CHARGE_TIME = (Config and Config.BALL_CONTROL and Config.BALL_CONTROL.chargeTime) or 0.9
+local ANIM_CFG = (Config and Config.ANIM) or {}
+-- Config.ANIM.poseHumanoid = false -> prosedürel pozu tamamen kapat, Roblox'un
+-- varsayılan animasyonlarına dön (kaçış kapağı; sunucu da aynı bayrağı okur).
+local POSE_HUMANOID = ANIM_CFG.poseHumanoid ~= false
+
 local BC = (Config and Config.BALL_CONTROL) or {}
 local KICK_REACH = BC.kickReach or 2.0
 -- Sunucuyla AYNI kural: top sürerken dokunuş topu öne ittiği için şut menzili
@@ -83,7 +88,7 @@ local shotTypes = SHOT.types or { "instep" }
 local shotIndex = 1
 local currentFoot = "R" -- "L" | "R"
 
-local HINT_FORMAT = "WASD → topa yaklaş  ·  SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (%s)   |   F → ayak   |   V → izleme   |   R → sıfırla"
+local HINT_FORMAT = "WASD → topa yaklaş  ·  SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (%s)   |   C → kamera: %s   |   F → ayak   |   V → izleme   |   R → sıfırla"
 
 -- ÖNEMLİ: `hint` etiketi aşağıda (HUD bölümünde) oluşturuluyor. Lua'da bir
 -- local'in kapsamı bildiriminden SONRA başlar; bu yüzden `local hint` burada
@@ -94,6 +99,21 @@ local hint
 local function shotLabel()
 	local st = shotTypes[shotIndex] or "instep"
 	return (SHOT.labels and SHOT.labels[st] or st) .. "  |  ayak: " .. currentFoot
+end
+
+-- KAMERA KİPLERİ
+--   first      : 1. ŞAHIS (varsayılan). Kamerayı Roblox sürer (baş kilitli),
+--                biz CFrame yazmayız; karakterin gövdesi aşağı bakınca görünür.
+--   third      : 3. şahıs, omuz üstü ve YAKIN (kendi animasyonunu görmek için).
+--   spectator  : izleme — topun arkasına geçip kaleyi çerçeveler (V).
+-- C: 1. şahıs <-> 3. şahıs. V: izleme aç/kapa (eski davranış korunur).
+local CAMERA_LABEL = { first = "1. şahıs (C)", third = "3. şahıs (C)", spectator = "izleme (V)" }
+local cameraMode = "first"
+local nonSpectatorMode = "first" -- V'den çıkınca dönülecek kip
+local appliedCameraMode = nil -- kip değişince bir kez yaz (her karede değil)
+
+local function cameraLabel()
+	return CAMERA_LABEL[cameraMode] or cameraMode
 end
 
 -- Sunucunun şutu SESSİZCE reddettiği durum (top menzil dışında) istemcide
@@ -116,7 +136,7 @@ local function updateHint()
 	end
 	if serverHint and animClock < serverHintUntil then
 		-- Sunucunun verdiği neden her şeyden önce gelir (otoriter bilgi).
-		hint.Text = serverHint .. "   |   " .. shotLabel()
+		hint.Text = serverHint .. "   |   " .. shotLabel() .. "   |   " .. cameraLabel()
 		hint.TextColor3 = Color3.fromRGB(255, 226, 140)
 		return
 	end
@@ -127,10 +147,12 @@ local function updateHint()
 		hint.Text = "TOPA YAKLAŞ → " .. string.format("%.1f", reachState)
 			.. " m önde  ·  menzil " .. string.format("%.1f", POSSESSION_REACH)
 			.. " m  ·  " .. verdict .. "  ·  WASD ile koş   |   " .. shotLabel()
+			.. "   |   " .. cameraLabel()
 		hint.TextColor3 = Color3.fromRGB(255, 206, 110)
 		return
 	end
-	hint.Text = (inStrictReach and "ŞUT HAZIR  ·  " or "") .. string.format(HINT_FORMAT, shotLabel())
+	hint.Text = (inStrictReach and "ŞUT HAZIR  ·  " or "")
+		.. string.format(HINT_FORMAT, shotLabel(), cameraLabel())
 	hint.TextColor3 = inStrictReach and Color3.fromRGB(150, 255, 190) or Color3.fromRGB(232, 240, 246)
 end
 
@@ -174,7 +196,23 @@ local function setJumpEnabled(enabled)
 	end
 end
 
-local poseOk = false -- karakter R15 mi (pozlanabiliyor mu)?
+local poseOk = false -- karakter pozlanabiliyor mu (R15 ya da R6)?
+
+--[[ Roblox'un varsayılan karakter animasyonu (`Animate` LocalScript) her karede
+     Motor6D.Transform'a KENDİ pozunu yazar ve bizim prosedürel pozumuzu EZER.
+     Studio'da "animasyonlar çalışmıyor" görünmesinin asıl nedeni bu: kod doğru
+     pozu üretiyor ama ekrana varsayılan animasyon yansıyor.
+     Pozlama gerçekten çalışıyorsa varsayılanı kapatırız; çalışmıyorsa (eklem
+     bulunamadı) DOKUNMAYIZ ki karakter donmuş bir heykele dönmesin.
+     Dönüş: karakterde Animate script'i bulundu mu? ]]
+local function setDefaultAnimateEnabled(char, enabled)
+	local animate = char:FindFirstChild("Animate")
+	if animate and animate:IsA("LocalScript") then
+		animate.Disabled = not enabled
+		return true
+	end
+	return false
+end
 
 local function bindCharacter(char)
 	character = char
@@ -182,10 +220,15 @@ local function bindCharacter(char)
 	humanoid = char:WaitForChild("Humanoid", 10)
 	setJumpEnabled(false)
 	poseOk = false
-	if HumanoidPose and PlayerPose then
+	if POSE_HUMANOID and HumanoidPose and PlayerPose then
 		local ok, supported = pcall(HumanoidPose.supported, char)
 		poseOk = ok and supported == true
 	end
+	-- Prosedürel poz çalışıyorsa varsayılan animasyon kapanır (yoksa ezer).
+	setDefaultAnimateEnabled(char, not poseOk)
+	-- Yeni karakterde Humanoid de yeni: kamera kipi (1. şahıs kilidi) yeniden
+	-- uygulanmalı, aksi halde respawn sonrası 3. şahısta kalır.
+	appliedCameraMode = nil
 end
 if player.Character then
 	bindCharacter(player.Character)
@@ -336,9 +379,8 @@ end
 -- ------------------------------------------------------------ şut / nişan
 local charging = false
 local charge = 0
--- İzleme kipi (V): kamera topun arkasına geçip kaleyi çerçeveler.
--- Animasyonları (adaptif şut / kaleci dalışı) yakından izlemek için.
-local spectator = false
+-- (kamera kipi durumu yukarıda, HUD bölümünün yanında tanımlı: Lua'da bir local
+--  bildiriminden ÖNCE görünmez, bu yüzden cameraLabel()'den önce gelmeli.)
 
 -- Kamera Scriptable ve sabit bir konumda durduğu için (aşağıda updateCamera)
 -- kameranın LookVector'ü oyuncunun baktığı yer DEĞİLDİR: nişan fareyle alınır.
@@ -378,9 +420,32 @@ local function projectToGoalPlane(origin, dir)
 	return Vector3.new(GOAL_PLANE, y, z)
 end
 
+--[[ Karakterin baktığı yönden nişan ışını (baş yüksekliğinden).
+     1. şahısta kamera başa kilitli ve fare ekranın ortasında olduğu için
+     nişan = karakterin yönü. Ayrıca kameraya erişilemediği durumlarda SON
+     ÇARE olarak kullanılır: şut hiçbir zaman sessizce yutulmaz. ]]
+local function characterAim()
+	if not hrp or not hrp.Parent then
+		return nil, nil
+	end
+	return hrp.Position + Vector3.new(0, 1.2, 0), hrp.CFrame.LookVector
+end
+
 local function computeAim()
+	-- 1. ŞAHIS: fare ışını bu kipte anlamlı değil (fare merkezde kilitli);
+	-- nişan karakterin baktığı yerdir.
+	if cameraMode == "first" then
+		local origin, dir = characterAim()
+		if origin then
+			local aim = projectToGoalPlane(origin, dir)
+			if aim then
+				return aim
+			end
+		end
+	end
 	if not camera then
-		return nil
+		local origin, dir = characterAim()
+		return origin and projectToGoalPlane(origin, dir) or nil
 	end
 	local ray = mouseRay(camera)
 	if ray then
@@ -389,7 +454,22 @@ local function computeAim()
 			return aim
 		end
 	end
-	return projectToGoalPlane(camera.CFrame.Position, camera.CFrame.LookVector)
+	local fromCamera = projectToGoalPlane(camera.CFrame.Position, camera.CFrame.LookVector)
+	if fromCamera then
+		return fromCamera
+	end
+	-- Kamera bakışı da kaleyi önden kesmiyorsa karakterin yönüne düş.
+	local origin, dir = characterAim()
+	if origin then
+		local fromCharacter = projectToGoalPlane(origin, dir)
+		if fromCharacter then
+			return fromCharacter
+		end
+	end
+	-- SON ÇARE: hiçbir ışın kaleyi ÖNDEN kesmiyorsa (ör. karakterin sırtı
+	-- kaleye dönük) nişan KALE ORTASINA düşer. computeAim nil dönerse fireKick
+	-- hiç FireServer çağırmaz ve şut SESSİZCE yutulur — bu kabul edilemez.
+	return Vector3.new(GOAL_PLANE, 1.0 * S, 0)
 end
 
 local function fireKick()
@@ -429,7 +509,17 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	elseif input.KeyCode == Enum.KeyCode.R and resetRemote then
 		resetRemote:FireServer()
 	elseif input.KeyCode == Enum.KeyCode.V then
-		spectator = not spectator
+		if cameraMode == "spectator" then
+			cameraMode = nonSpectatorMode
+		else
+			cameraMode = "spectator"
+		end
+		updateHint()
+	elseif input.KeyCode == Enum.KeyCode.C then
+		-- 1. şahıs <-> 3. şahıs (izlemeden de çıkarır)
+		cameraMode = (cameraMode == "first") and "third" or "first"
+		nonSpectatorMode = cameraMode
+		updateHint()
 	elseif input.KeyCode == Enum.KeyCode.T then
 		cycleShotType()
 	elseif input.KeyCode == Enum.KeyCode.F then
@@ -482,22 +572,46 @@ local function onFrame(dt)
 	renderPos = renderPos:Lerp(predicted, k)
 	visual.CFrame = CFrame.new(renderPos)
 
-	-- Kamera: karakterin arkasında (ya da izleme kipinde topun arkasında)
+	-- Kamera kipi: yalnızca kip DEĞİŞTİĞİNDE yaz (her karede CameraType/CameraMode
+	-- yazmak Roblox'un kendi kamera güncellemesiyle yarışır).
 	local cam = resolveCamera()
-	if cam then
+	if cam and appliedCameraMode ~= cameraMode then
+		appliedCameraMode = cameraMode
 		camera = cam
+		camInit = false -- yeni kipe geçerken yumuşatma sıfırlansın (teleport hissi olmasın)
+		if cameraMode == "first" then
+			-- 1. ŞAHIS: kamerayı Roblox sürer (Humanoid.CameraMode = LockFirstPerson
+			-- başı kilitler ve Head'i gizler). Biz CFrame YAZMAYIZ; yazsak
+			-- Roblox ile kavga eder ve görüntü titrer.
+			if humanoid then
+				humanoid.CameraMode = Enum.CameraMode.LockFirstPerson
+			end
+			cam.CameraType = Enum.CameraType.Custom
+		else
+			if humanoid then
+				humanoid.CameraMode = Enum.CameraMode.Classic
+			end
+			cam.CameraType = Enum.CameraType.Scriptable
+		end
+	end
+
+	-- 3. şahıs / izleme: kamerayı biz süreriz
+	if cam and camera and cameraMode ~= "first" then
 		local focus = renderPos
 		local desiredPos, desiredLook
-		if spectator then
+		if cameraMode == "spectator" then
 			-- Top neredeyse oraya yerleş, kaleyi çerçevele
 			desiredPos = focus + Vector3.new(-26, 15, 7)
 			desiredLook = Vector3.new(GOAL_PLANE, 1.2 * S, 0)
 		else
+			-- 3. ŞAHIS: omuz üstü ve YAKIN. Eskiden 30 stud geride / 20 stud
+			-- yukarıdaydı; karakter ekranda birkaç piksel kaldığı için
+			-- animasyonlar "çalışmıyor" gibi görünüyordu.
 			if hrp and hrp.Parent then
 				focus = hrp.Position
 			end
-			desiredPos = focus + Vector3.new(-30, 20, 9)
-			desiredLook = focus + Vector3.new(34, -3, 0)
+			desiredPos = focus + Vector3.new(-8.5, 4.0, 0)
+			desiredLook = focus + Vector3.new(12, -0.8, 0)
 		end
 		if not camInit then
 			camPos = desiredPos
@@ -509,7 +623,6 @@ local function onFrame(dt)
 			camLook = camLook:Lerp(desiredLook, ck)
 		end
 		camera.CFrame = CFrame.lookAt(camPos, camLook)
-		camera.CameraType = Enum.CameraType.Scriptable
 	end
 
 	-- Menzil geri bildirimi: sunucu top uzaktayken şutu sessizce reddeder;
@@ -544,7 +657,10 @@ local function onFrame(dt)
 			local pose = windupPose or PlayerPose.walk(animClock, speed)
 			local ok = pcall(HumanoidPose.apply, character, pose)
 			if not ok then
+				-- Pozlama bozuldu: karakteri T-pozda DONMUŞ bırakma — varsayılan
+				-- Roblox animasyonunu geri aç (kendi kendini onaran davranış).
 				poseOk = false
+				setDefaultAnimateEnabled(character, true)
 			end
 		end
 	end
