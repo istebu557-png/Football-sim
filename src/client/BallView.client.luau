@@ -13,10 +13,11 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local ContextActionService = game:GetService("ContextActionService")
 local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
+-- CurrentCamera, LocalScript çok erken çalışırsa nil olabilir; kare döngüsünde
+-- tekrar denenir (aşağıda resolveCamera).
 local camera = Workspace.CurrentCamera
 
 -- Config (varsa gerçek değerler, yoksa makul varsayılanlar)
@@ -31,7 +32,6 @@ do
 	end
 end
 local S = Config and Config.STUDS_PER_METER or 3.5714
-local R = Config and Config.BALL.radius or 0.11
 local PITCH = Config and Config.PITCH
 local HALF_LENGTH = PITCH and PITCH.halfLength or 52.5
 local GOAL_PLANE = HALF_LENGTH * S
@@ -43,46 +43,57 @@ local shotTypes = SHOT.types or { "instep" }
 local shotIndex = 1
 local currentFoot = "R" -- "L" | "R"
 
+local HINT_FORMAT = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (%s)   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+
+-- ÖNEMLİ: `hint` etiketi aşağıda (HUD bölümünde) oluşturuluyor. Lua'da bir
+-- local'in kapsamı bildiriminden SONRA başlar; bu yüzden `local hint` burada
+-- bildirilmezse fonksiyonların içindeki `hint` GLOBAL sayılır ve T/F'ye
+-- basıldığında "attempt to index a nil value (global 'hint')" hatası verir.
+local hint
+
 local function shotLabel()
 	local st = shotTypes[shotIndex] or "instep"
 	return (SHOT.labels and SHOT.labels[st] or st) .. "  |  ayak: " .. currentFoot
 end
 
+local function updateHint()
+	if hint then
+		hint.Text = string.format(HINT_FORMAT, shotLabel())
+	end
+end
+
 local function cycleShotType()
 	shotIndex = shotIndex % #shotTypes + 1
-	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+	updateHint()
 end
 
 local function toggleFoot()
 	currentFoot = (currentFoot == "R") and "L" or "R"
-	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+	updateHint()
 end
 
 -- ---------------------------------------------------------------- karakter
 local character, hrp
 local humanoid
-local function bindCharacter(char)
-	character = char
-	hrp = char:WaitForChild("HumanoidRootPart", 10)
-	humanoid = char:WaitForChild("Humanoid", 10)
-end
-if player.Character then
-	bindCharacter(player.Character)
-end
-player.CharacterAdded:Connect(bindCharacter)
 
--- Jump'i devre dışı bırak / geri yükle (Space şut için kullanılır)
+-- Zıplamayı aç/kapat. SPACE şut gücü için kullanıldığından karakterin
+-- zıplamaması gerekir.
+-- NOT: `Humanoid.Jump = false` zıplamayı KAPATMAZ; Jump yalnızca "şimdi zıpla"
+-- isteğidir. Doğru API `SetStateEnabled(HumanoidStateType.Jumping, false)`.
 local jumpConn
 local function setJumpEnabled(enabled)
-	if humanoid then
-		humanoid.Jump = enabled
+	if not humanoid then
+		return
 	end
+	pcall(function()
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, enabled)
+	end)
 	if jumpConn then
 		jumpConn:Disconnect()
 		jumpConn = nil
 	end
 	if not enabled then
-		-- Space basıldığında karakterin zıplamasını engelle
+		-- Yedek: bir şekilde Jumping durumuna girerse hemen geri kalk
 		jumpConn = humanoid.StateChanged:Connect(function(_, newState)
 			if newState == Enum.HumanoidStateType.Jumping then
 				humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
@@ -90,6 +101,17 @@ local function setJumpEnabled(enabled)
 		end)
 	end
 end
+
+local function bindCharacter(char)
+	character = char
+	hrp = char:WaitForChild("HumanoidRootPart", 10)
+	humanoid = char:WaitForChild("Humanoid", 10)
+	setJumpEnabled(false)
+end
+if player.Character then
+	bindCharacter(player.Character)
+end
+player.CharacterAdded:Connect(bindCharacter)
 
 -- -------------------------------------------------------------------- top
 local serverBall = Workspace:WaitForChild("MatchBall", 30)
@@ -139,7 +161,10 @@ gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.Parent = player:WaitForChild("PlayerGui")
 
-local hint = Instance.new("TextLabel")
+-- `hint` yukarıda BİLDİRİLDİ (local hint), burada yalnızca ATANIR: yeni bir
+-- `local` açarsak updateHint() eski (nil) upvalue'yu görmeye devam eder.
+hint = Instance.new("TextLabel")
+hint.Name = "Hint"
 hint.AnchorPoint = Vector2.new(0.5, 1)
 hint.Position = UDim2.new(0.5, 0, 1, -26)
 hint.Size = UDim2.new(0, 560, 0, 34)
@@ -149,7 +174,7 @@ hint.BorderSizePixel = 0
 hint.TextColor3 = Color3.fromRGB(232, 240, 246)
 hint.Font = Enum.Font.GothamMedium
 hint.TextSize = 15
-hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+updateHint()
 hint.Parent = gui
 
 local hintCorner = Instance.new("UICorner")
@@ -158,6 +183,7 @@ hintCorner.Parent = hint
 
 -- Güç barı
 local barBack = Instance.new("Frame")
+barBack.Name = "ChargeBar"
 barBack.AnchorPoint = Vector2.new(0.5, 1)
 barBack.Position = UDim2.new(0.5, 0, 1, -68)
 barBack.Size = UDim2.new(0, 320, 0, 14)
@@ -171,6 +197,7 @@ barBackCorner.CornerRadius = UDim.new(0, 7)
 barBackCorner.Parent = barBack
 
 local barFill = Instance.new("Frame")
+barFill.Name = "ChargeFill"
 barFill.Size = UDim2.new(0, 0, 1, 0)
 barFill.BackgroundColor3 = Color3.fromRGB(61, 220, 132)
 barFill.BorderSizePixel = 0
@@ -182,6 +209,7 @@ barFillCorner.Parent = barFill
 
 -- Skor / duyuru
 local scoreLabel = Instance.new("TextLabel")
+scoreLabel.Name = "Score"
 scoreLabel.AnchorPoint = Vector2.new(0.5, 0)
 scoreLabel.Position = UDim2.new(0.5, 0, 0, 14)
 scoreLabel.Size = UDim2.new(0, 420, 0, 28)
@@ -224,9 +252,31 @@ local charge = 0
 -- Animasyonları (adaptif şut / kaleci dalışı) yakından izlemek için.
 local spectator = false
 
-local function computeAim()
-	local origin = camera.CFrame.Position
-	local dir = camera.CFrame.LookVector
+-- Kamera Scriptable ve sabit bir konumda durduğu için (aşağıda updateCamera)
+-- kameranın LookVector'ü oyuncunun baktığı yer DEĞİLDİR: nişan fareyle alınır.
+-- Sıra: (1) fare ekran noktasından dünya ışını, (2) ışın kale düzlemini önden
+-- kesmiyorsa kamera bakışı. Böylece gökyüzüne nişan alınca şut sessizce yutulmaz.
+local function mouseRay(cam)
+	local ok, loc = pcall(function()
+		return UserInputService:GetMouseLocation()
+	end)
+	if not ok or not loc then
+		return nil
+	end
+	local okRay, ray = pcall(function()
+		return cam:ViewportPointToRay(loc.X, loc.Y)
+	end)
+	if not okRay or not ray or not ray.Direction then
+		return nil
+	end
+	return ray
+end
+
+-- Bir ışını kale düzlemine (X = GOAL_PLANE) izdüşürür; önden kesmiyorsa nil.
+local function projectToGoalPlane(origin, dir)
+	if not origin or not dir then
+		return nil
+	end
 	if dir.X <= 0.05 then
 		return nil
 	end
@@ -238,6 +288,20 @@ local function computeAim()
 	local z = math.clamp(hit.Z, -3.3 * S, 3.3 * S)
 	local y = math.clamp(hit.Y, 0.25 * S, 2.3 * S)
 	return Vector3.new(GOAL_PLANE, y, z)
+end
+
+local function computeAim()
+	if not camera then
+		return nil
+	end
+	local ray = mouseRay(camera)
+	if ray then
+		local aim = projectToGoalPlane(ray.Origin, ray.Direction)
+		if aim then
+			return aim
+		end
+	end
+	return projectToGoalPlane(camera.CFrame.Position, camera.CFrame.LookVector)
 end
 
 local function fireKick()
@@ -270,6 +334,22 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	end
 end)
 
+-- BIRAKMA = ŞUT. Güç barı basılı tutarken dolar; tuş bırakıldığında şut
+-- sunucuya gönderilir (sunucu gücü/nişanı doğrular, şutu kendi uygular).
+UserInputService.InputEnded:Connect(function(input)
+	if input.KeyCode ~= Enum.KeyCode.Space then
+		return
+	end
+	if not charging then
+		return
+	end
+	charging = false
+	barBack.Visible = false
+	barFill.Size = UDim2.new(0, 0, 1, 0)
+	fireKick()
+	charge = 0
+end)
+
 -- ------------------------------------------------------------- kare döngüsü
 local renderPos = serverBall.Position
 local lastTarget = serverBall.Position
@@ -277,7 +357,14 @@ local ballVel = Vector3.zero
 local camPos = Vector3.new(-90, 60, 25)
 local camLook = Vector3.zero
 local camInit = false
-local stats = { goals = 0, saves = 0, kicks = 0 }
+
+-- CurrentCamera, LocalScript ilk karelerden önce hazır değilse nil kalabilir.
+local function resolveCamera()
+	if not camera then
+		camera = Workspace.CurrentCamera
+	end
+	return camera
+end
 
 local function onFrame(dt)
 	-- Top: sunucu konumunu yumuşat + hız tahmini
@@ -290,7 +377,9 @@ local function onFrame(dt)
 	visual.CFrame = CFrame.new(renderPos)
 
 	-- Kamera: karakterin arkasında (ya da izleme kipinde topun arkasında)
-	if camera then
+	local cam = resolveCamera()
+	if cam then
+		camera = cam
 		local focus = renderPos
 		local desiredPos, desiredLook
 		if spectator then

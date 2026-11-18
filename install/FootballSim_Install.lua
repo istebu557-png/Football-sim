@@ -8,7 +8,7 @@
 	  4) Sahne kurulur, scriptler yerleşir. Play'e bas: SPACE ile şut çek.
 
 	Yeniden üretmek için: npm run install:build
-	Kaynak: src/ (26 modül)
+	Kaynak: src/ (27 modül)
 ]]
 
 local SOURCES = {
@@ -28,10 +28,11 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local ContextActionService = game:GetService("ContextActionService")
 local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
+-- CurrentCamera, LocalScript çok erken çalışırsa nil olabilir; kare döngüsünde
+-- tekrar denenir (aşağıda resolveCamera).
 local camera = Workspace.CurrentCamera
 
 -- Config (varsa gerçek değerler, yoksa makul varsayılanlar)
@@ -46,7 +47,6 @@ do
 	end
 end
 local S = Config and Config.STUDS_PER_METER or 3.5714
-local R = Config and Config.BALL.radius or 0.11
 local PITCH = Config and Config.PITCH
 local HALF_LENGTH = PITCH and PITCH.halfLength or 52.5
 local GOAL_PLANE = HALF_LENGTH * S
@@ -58,46 +58,57 @@ local shotTypes = SHOT.types or { "instep" }
 local shotIndex = 1
 local currentFoot = "R" -- "L" | "R"
 
+local HINT_FORMAT = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (%s)   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+
+-- ÖNEMLİ: `hint` etiketi aşağıda (HUD bölümünde) oluşturuluyor. Lua'da bir
+-- local'in kapsamı bildiriminden SONRA başlar; bu yüzden `local hint` burada
+-- bildirilmezse fonksiyonların içindeki `hint` GLOBAL sayılır ve T/F'ye
+-- basıldığında "attempt to index a nil value (global 'hint')" hatası verir.
+local hint
+
 local function shotLabel()
 	local st = shotTypes[shotIndex] or "instep"
 	return (SHOT.labels and SHOT.labels[st] or st) .. "  |  ayak: " .. currentFoot
 end
 
+local function updateHint()
+	if hint then
+		hint.Text = string.format(HINT_FORMAT, shotLabel())
+	end
+end
+
 local function cycleShotType()
 	shotIndex = shotIndex % #shotTypes + 1
-	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+	updateHint()
 end
 
 local function toggleFoot()
 	currentFoot = (currentFoot == "R") and "L" or "R"
-	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+	updateHint()
 end
 
 -- ---------------------------------------------------------------- karakter
 local character, hrp
 local humanoid
-local function bindCharacter(char)
-	character = char
-	hrp = char:WaitForChild("HumanoidRootPart", 10)
-	humanoid = char:WaitForChild("Humanoid", 10)
-end
-if player.Character then
-	bindCharacter(player.Character)
-end
-player.CharacterAdded:Connect(bindCharacter)
 
--- Jump'i devre dışı bırak / geri yükle (Space şut için kullanılır)
+-- Zıplamayı aç/kapat. SPACE şut gücü için kullanıldığından karakterin
+-- zıplamaması gerekir.
+-- NOT: `Humanoid.Jump = false` zıplamayı KAPATMAZ; Jump yalnızca "şimdi zıpla"
+-- isteğidir. Doğru API `SetStateEnabled(HumanoidStateType.Jumping, false)`.
 local jumpConn
 local function setJumpEnabled(enabled)
-	if humanoid then
-		humanoid.Jump = enabled
+	if not humanoid then
+		return
 	end
+	pcall(function()
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, enabled)
+	end)
 	if jumpConn then
 		jumpConn:Disconnect()
 		jumpConn = nil
 	end
 	if not enabled then
-		-- Space basıldığında karakterin zıplamasını engelle
+		-- Yedek: bir şekilde Jumping durumuna girerse hemen geri kalk
 		jumpConn = humanoid.StateChanged:Connect(function(_, newState)
 			if newState == Enum.HumanoidStateType.Jumping then
 				humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
@@ -105,6 +116,17 @@ local function setJumpEnabled(enabled)
 		end)
 	end
 end
+
+local function bindCharacter(char)
+	character = char
+	hrp = char:WaitForChild("HumanoidRootPart", 10)
+	humanoid = char:WaitForChild("Humanoid", 10)
+	setJumpEnabled(false)
+end
+if player.Character then
+	bindCharacter(player.Character)
+end
+player.CharacterAdded:Connect(bindCharacter)
 
 -- -------------------------------------------------------------------- top
 local serverBall = Workspace:WaitForChild("MatchBall", 30)
@@ -154,7 +176,10 @@ gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.Parent = player:WaitForChild("PlayerGui")
 
-local hint = Instance.new("TextLabel")
+-- `hint` yukarıda BİLDİRİLDİ (local hint), burada yalnızca ATANIR: yeni bir
+-- `local` açarsak updateHint() eski (nil) upvalue'yu görmeye devam eder.
+hint = Instance.new("TextLabel")
+hint.Name = "Hint"
 hint.AnchorPoint = Vector2.new(0.5, 1)
 hint.Position = UDim2.new(0.5, 0, 1, -26)
 hint.Size = UDim2.new(0, 560, 0, 34)
@@ -164,7 +189,7 @@ hint.BorderSizePixel = 0
 hint.TextColor3 = Color3.fromRGB(232, 240, 246)
 hint.Font = Enum.Font.GothamMedium
 hint.TextSize = 15
-hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+updateHint()
 hint.Parent = gui
 
 local hintCorner = Instance.new("UICorner")
@@ -173,6 +198,7 @@ hintCorner.Parent = hint
 
 -- Güç barı
 local barBack = Instance.new("Frame")
+barBack.Name = "ChargeBar"
 barBack.AnchorPoint = Vector2.new(0.5, 1)
 barBack.Position = UDim2.new(0.5, 0, 1, -68)
 barBack.Size = UDim2.new(0, 320, 0, 14)
@@ -186,6 +212,7 @@ barBackCorner.CornerRadius = UDim.new(0, 7)
 barBackCorner.Parent = barBack
 
 local barFill = Instance.new("Frame")
+barFill.Name = "ChargeFill"
 barFill.Size = UDim2.new(0, 0, 1, 0)
 barFill.BackgroundColor3 = Color3.fromRGB(61, 220, 132)
 barFill.BorderSizePixel = 0
@@ -197,6 +224,7 @@ barFillCorner.Parent = barFill
 
 -- Skor / duyuru
 local scoreLabel = Instance.new("TextLabel")
+scoreLabel.Name = "Score"
 scoreLabel.AnchorPoint = Vector2.new(0.5, 0)
 scoreLabel.Position = UDim2.new(0.5, 0, 0, 14)
 scoreLabel.Size = UDim2.new(0, 420, 0, 28)
@@ -239,9 +267,31 @@ local charge = 0
 -- Animasyonları (adaptif şut / kaleci dalışı) yakından izlemek için.
 local spectator = false
 
-local function computeAim()
-	local origin = camera.CFrame.Position
-	local dir = camera.CFrame.LookVector
+-- Kamera Scriptable ve sabit bir konumda durduğu için (aşağıda updateCamera)
+-- kameranın LookVector'ü oyuncunun baktığı yer DEĞİLDİR: nişan fareyle alınır.
+-- Sıra: (1) fare ekran noktasından dünya ışını, (2) ışın kale düzlemini önden
+-- kesmiyorsa kamera bakışı. Böylece gökyüzüne nişan alınca şut sessizce yutulmaz.
+local function mouseRay(cam)
+	local ok, loc = pcall(function()
+		return UserInputService:GetMouseLocation()
+	end)
+	if not ok or not loc then
+		return nil
+	end
+	local okRay, ray = pcall(function()
+		return cam:ViewportPointToRay(loc.X, loc.Y)
+	end)
+	if not okRay or not ray or not ray.Direction then
+		return nil
+	end
+	return ray
+end
+
+-- Bir ışını kale düzlemine (X = GOAL_PLANE) izdüşürür; önden kesmiyorsa nil.
+local function projectToGoalPlane(origin, dir)
+	if not origin or not dir then
+		return nil
+	end
 	if dir.X <= 0.05 then
 		return nil
 	end
@@ -253,6 +303,20 @@ local function computeAim()
 	local z = math.clamp(hit.Z, -3.3 * S, 3.3 * S)
 	local y = math.clamp(hit.Y, 0.25 * S, 2.3 * S)
 	return Vector3.new(GOAL_PLANE, y, z)
+end
+
+local function computeAim()
+	if not camera then
+		return nil
+	end
+	local ray = mouseRay(camera)
+	if ray then
+		local aim = projectToGoalPlane(ray.Origin, ray.Direction)
+		if aim then
+			return aim
+		end
+	end
+	return projectToGoalPlane(camera.CFrame.Position, camera.CFrame.LookVector)
 end
 
 local function fireKick()
@@ -285,6 +349,22 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	end
 end)
 
+-- BIRAKMA = ŞUT. Güç barı basılı tutarken dolar; tuş bırakıldığında şut
+-- sunucuya gönderilir (sunucu gücü/nişanı doğrular, şutu kendi uygular).
+UserInputService.InputEnded:Connect(function(input)
+	if input.KeyCode ~= Enum.KeyCode.Space then
+		return
+	end
+	if not charging then
+		return
+	end
+	charging = false
+	barBack.Visible = false
+	barFill.Size = UDim2.new(0, 0, 1, 0)
+	fireKick()
+	charge = 0
+end)
+
 -- ------------------------------------------------------------- kare döngüsü
 local renderPos = serverBall.Position
 local lastTarget = serverBall.Position
@@ -292,7 +372,14 @@ local ballVel = Vector3.zero
 local camPos = Vector3.new(-90, 60, 25)
 local camLook = Vector3.zero
 local camInit = false
-local stats = { goals = 0, saves = 0, kicks = 0 }
+
+-- CurrentCamera, LocalScript ilk karelerden önce hazır değilse nil kalabilir.
+local function resolveCamera()
+	if not camera then
+		camera = Workspace.CurrentCamera
+	end
+	return camera
+end
 
 local function onFrame(dt)
 	-- Top: sunucu konumunu yumuşat + hız tahmini
@@ -305,7 +392,9 @@ local function onFrame(dt)
 	visual.CFrame = CFrame.new(renderPos)
 
 	-- Kamera: karakterin arkasında (ya da izleme kipinde topun arkasında)
-	if camera then
+	local cam = resolveCamera()
+	if cam then
+		camera = cam
 		local focus = renderPos
 		local desiredPos, desiredLook
 		if spectator then
@@ -383,6 +472,7 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local Vec3 = require(Shared.Core.Vec3)
+local Validate = require(Shared.Core.Validate)
 local Rng = require(Shared.Core.Rng)
 local Ballistics = require(Shared.Core.Ballistics)
 local Sim = require(Shared.Sim)
@@ -396,9 +486,12 @@ local KickAnim = require(Shared.Anim.KickAnim)
 local HumanoidPose = require(Shared.Anim.HumanoidPose)
 
 local S = Config.STUDS_PER_METER
-local R = Config.BALL.radius
 local P = Config.PITCH
 local ANIM = Config.ANIM or {}
+
+-- Lua 5.3: math.atan(y, x) | Luau: math.atan2(y, x). Ikisi de desteklensin
+-- (Vec3 ve SceneBuilder ile ayni desen; test kosucusu Lua 5.3 kullanir).
+local atan2 = math.atan2 or math.atan
 
 -- ---------------------------------------------------------------- 1) Sahne
 local scene = SceneBuilder.build({ half = true, goalSide = 1 })
@@ -459,7 +552,7 @@ local function playerState(player)
 		return nil
 	end
 	local look = hrp.CFrame.LookVector
-	local facing = math.atan2(look.Z, look.X) -- +x'ten +z'ye (Vec3.yaw ile aynı)
+	local facing = atan2(look.Z, look.X) -- +x'ten +z'ye (Vec3.yaw ile aynı)
 	return BallControl.playerState(
 		Vector3.new(hrp.Position.X, 0, hrp.Position.Z),
 		hrp.AssemblyLinearVelocity,
@@ -492,6 +585,35 @@ resetBall()
 local lastKickAt = {}
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 
+--[[ İstemciden gelen HER değer güvenilmezdir (exploiter arbitrary tablo/string
+	gönderebilir). KickAnim, `SHOT[shotType]` ve `"hip" .. foot` kullandığı için
+	doğrulanmamış girdi sunucu handler'ını patlatır (ör. shotType = "labels" ->
+	sp.power = nil -> aritmetik hatası; foot = {} -> concatenate hatası).
+	Bu yüzden beyaz liste: listede yoksa varsayılana düş. ]]
+-- Politika: BEYAZ LİSTE + VARSAYILANA DÜŞ. Kurallar src/shared/Core/Validate.luau
+-- içinde (birim testli); burada yalnızca bu dosyanın kullandığı kısa adlar bağlanır.
+-- Çağrı yerleri (isFiniteVec3/sanitize*) bilerek aynı isimde kalır:
+-- tools/verify.js "her launch bölgesi isFiniteVec3 ile korunmuş mu?" diye statik
+-- denetim yapar.
+local VALID_SHOT_TYPES = Validate.shotTypeSet(Config.SHOT)
+
+local function sanitizeShotType(value)
+	return Validate.shotType(value, VALID_SHOT_TYPES)
+end
+
+local function sanitizeFoot(value)
+	return Validate.foot(value)
+end
+
+-- NaN/inf istemciden gelebilir: math.min(1, NaN) = NaN olduğu için clamp yetmez,
+-- sonlu sayı denetimi şart. Bu yüzden güç/nişan Validate.clamp'ten geçer (önce
+-- sonluluk, sonra aralık); topa yazılacak hız ise aşağıdaki isFiniteVec3'ten.
+-- Topa YAZILACAK hız için son savunma hattı: Ballistics.solveLaunch ulaşılamayan
+-- hedefte NaN üretebilir ve NaN hız simülasyonun geri kalanını kalıcı bozar.
+local function isFiniteVec3(v)
+	return Validate.vec3(v)
+end
+
 kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
 	local now = os.clock()
 	if lastKickAt[player] and now - lastKickAt[player] < 0.35 then
@@ -513,9 +635,9 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 
 	lastKickAt[player] = now
 
-	local c = math.max(0, math.min(1, tonumber(charge) or 0.5))
-	local targetZ = math.max(-3.3, math.min(3.3, tonumber(aimZ) or 0))
-	local targetY = math.max(0.2, math.min(2.3, tonumber(aimY) or 1.0))
+	local c = Validate.clamp(charge, 0, 1, 0.5)
+	local targetZ = Validate.clamp(aimZ, -3.3, 3.3, 0)
+	local targetY = Validate.clamp(aimY, 0.2, 2.3, 1.0)
 
 	-- Nişan hatası: yanal sapma (deterministik RNG)
 	local errRad = rng:normal(0, math.rad(Config.BALL_CONTROL.aimErrorDeg))
@@ -536,8 +658,8 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 		ballLateral = Vec3.dot(toBall, right),
 		ballForward = Vec3.dot(toBall, forward),
 		charge = c,
-		shotType = shotType or "instep",
-		foot = foot or nil, -- nil -> otomatik (topun yanına göre)
+		shotType = sanitizeShotType(shotType),
+		foot = sanitizeFoot(foot), -- nil -> otomatik (topun yanına göre)
 	})
 
 	local speed = control:speedForCharge(c)
@@ -555,13 +677,20 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 	}
 end)
 
+-- Sıfırlama da hız sınırlı: herhangi bir istemci bunu spamleyip maçı
+-- kilitleyemesin (sunucu otoritesi).
+local lastResetAt = 0
 resetRemote.OnServerEvent:Connect(function()
+	local now = os.clock()
+	if now - lastResetAt < 0.5 then
+		return
+	end
+	lastResetAt = now
 	resetBall()
 end)
 
 -- ------------------------------------------------------- 6) Ana döngü
 local resetTimer = 0
-local idleTime = 0
 local lastKeeperHits = 0
 
 local keeperAnim = nil
@@ -624,7 +753,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 		local shot = striker:step(frameDt, sim.ball, keeper)
 		if shot and shot.type == "shoot" then
 			local velocity = Ballistics.solveLaunch(sim.ball.pos, shot.target, shot.speed, Config.GRAVITY)
-			if velocity then
+			if isFiniteVec3(velocity) then
 				sim.ball.vel = velocity
 				sim.ball.spin = Ballistics.shotSpin(shot.speed, shot.target.y, shot.target.z)
 				sim.ball.mode = "air"
@@ -645,7 +774,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 				shot.speed,
 				Config.GRAVITY
 			)
-			if velocity then
+			if isFiniteVec3(velocity) then
 				getControl(player):kick(sim.ball, nil, velocity, shot.spin, sim.time)
 				stats.kicks = stats.kicks + 1
 			end
@@ -712,7 +841,6 @@ RunService.Heartbeat:Connect(function(frameDt)
 		sim.lastGoal = nil
 		stats.goals = stats.goals + 1
 		resetTimer = 2.4
-		idleTime = 0
 		broadcastState("goal", { side = goal.side, speed = sim.ball:speed() })
 		print(string.format(
 			"[MAC] GOL | toplam %d gol, %d kurtaris, %d sut | ag esnemesi %.2f m",
@@ -721,21 +849,6 @@ RunService.Heartbeat:Connect(function(frameDt)
 		return
 	end
 
-	-- Şutçu kapalıysa: top boşta kalırsa demo şutu (sahne canlı kalsın)
-	if not ANIM.strikerEnabled and sim.ball:speed() < 0.2 and resetTimer <= 0 then
-		idleTime = idleTime + frameDt
-		if idleTime > 12 then
-			idleTime = 0
-			local from = sim.ball.pos
-			local target = Vec3.new(P.halfLength, rng:range(0.5, 2.0), rng:symmetric(2.8))
-			local velocity = Ballistics.solveLaunch(from, target, rng:range(18, 26), Config.GRAVITY)
-			if velocity then
-				sim.ball:setState(from, velocity, Vec3.new(0, rng:symmetric(30), 0))
-			end
-		end
-	else
-		idleTime = 0
-	end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
@@ -744,8 +857,10 @@ Players.PlayerRemoving:Connect(function(player)
 	pending[player] = nil
 end)
 
+-- Banner gerçegi soylesin: sutu kim atiyor?
 print(string.format(
-	"[FootballSim] Hazir | yarim saha | 1 kaleci + 1 sutcu (prosedurel iskelet) | top fizigi %d Hz | %d direk engeli",
+	"[FootballSim] Hazir | yarim saha | 1 kaleci (AI) + %s | top fizigi %d Hz | %d direk engeli",
+	Config.ANIM.strikerEnabled and "1 sutcu NPC (demo)" or "sut: oynayan oyuncu",
 	Config.SIM_HZ,
 	#sim.obstacles
 ))
@@ -2115,7 +2230,10 @@ Config.NET = {
 	Pozlar Anim/Rig (FK) + Anim/KickAnim + Anim/KeeperAnim tarafından üretilir. ]]
 Config.ANIM = {
 	poseHumanoid = true, -- oyuncunun R15 eklemleri sunucudan sürülsün mü (deneysel)
-	strikerEnabled = true, -- prosedürel şutçu NPC'si (sunucu tarafı demo)
+	-- Prosedürel şutçu NPC'si VARSAYILAN KAPALI: sahada şutu atan oyuncunun
+	-- KENDİSİdir (SPACE), kaleci ise AI. NPC ancak demo/test için açılır
+	-- (Config.ANIM.strikerEnabled = true) — açıkken yürür ve şut çeker.
+	strikerEnabled = false,
 	keeperPoseEnabled = true, -- kaleci iskeleti gerçekten pozlansın mı
 }
 
@@ -2373,6 +2491,118 @@ function Rng:clone()
 end
 
 return Rng
+]=] },
+	["shared/Core/Validate"] = { class = "ModuleScript", source = [=[
+--[[
+	Validate — doğrulanmamış girdiyi güvenle kullanılabilir değere indirger.
+
+	NEDEN AYRI MODÜL
+	  İstemci `Kick` remote'una HERHANGİ bir şey gönderebilir: nil, tablo, string,
+	  NaN, 1e300. Sunucu bu değeri fiziğe ve animasyona verdiği için doğrulanmamış
+	  girdi iki şekilde patlar:
+	    1) Sessiz bozulma  — `math.min(1, NaN) == NaN`; NaN hız topun tüm durumunu
+	       zehirler ve bir daha düzelmez (top görünmez olur, skor donar).
+	    2) Handler çökmesi — `KickAnim`, `Config.SHOT[shotType]` ve `"hip" .. foot`
+	       kullanır; shotType = "labels" (gerçek bir tablo!) -> `sp.power = nil` ->
+	       aritmetik hatası; foot = {} -> concatenate hatası.
+	  Bu yüzden politika: BEYAZ LİSTE + VARSAYILANA DÜŞ. Girdi geçersizse istek
+	  reddedilmez, geçerli varsayılanla uygulanır (şut sessizce yutulmaz).
+
+	  Mantık burada, SimLoop'un içinde değil: böylece birim olarak test edilebilir
+	  ve hem sunucu hem istemci aynı kuralları paylaşır. Roblox API'si KULLANMAZ.
+]]
+
+local Validate = {}
+
+-- Config.SHOT.types boş/eksik olsa bile her zaman bir geçerli vuruş türü kalsın
+Validate.DEFAULT_SHOT_TYPE = "instep"
+
+-- Fizikte anlamı olan en büyük büyüklük (m/s, m). Üstü ölçüm hatası/istismardır.
+Validate.MAX_COMPONENT = 1e6
+
+--- Sayı mı, sonlu mu? Değilse `fallback`.
+-- tonumber("12") = 12 olduğu için sayısal string'ler de kabul edilir (istemci
+-- JSON benzeri bir katmandan string gönderebilir); tonumber({}) = nil -> fallback.
+function Validate.number(value, fallback)
+	local n = tonumber(value)
+	if n == nil then
+		return fallback
+	end
+	if n ~= n or n == math.huge or n == -math.huge then
+		return fallback
+	end
+	return n
+end
+
+--- Sayıya çevir, sonra [lo, hi] aralığına kıstır; geçersizse `fallback`.
+-- Sıra önemli: önce sonluluk, sonra clamp. `math.min(1, NaN)` NaN döndürdüğü
+-- için clamp tek başına koruma sağlamaz.
+function Validate.clamp(value, lo, hi, fallback)
+	local n = Validate.number(value, fallback)
+	if n < lo then
+		return lo
+	end
+	if n > hi then
+		return hi
+	end
+	return n
+end
+
+--- Vec3 benzeri `{x, y, z}` gerçekten sonlu bir vektör mü?
+-- Bu denetim topa YAZILACAK hız için son savunma hattıdır: balistik çözücü
+-- (Ballistics.solveLaunch) hedefe ulaşılamadığında NaN üretebilir ve NaN hız
+-- simülasyonun geri kalanını kalıcı olarak bozar.
+function Validate.vec3(v)
+	if type(v) ~= "table" then
+		return false
+	end
+	-- BİLEREK ipairs değil, indis ile: `ipairs({v.x, v.y, v.z})` z nil olduğunda
+	-- 2 elemanda durur ve eksik bileşenli tablo "geçerli" sayılırdı.
+	local components = { v.x, v.y, v.z }
+	for i = 1, 3 do
+		local component = components[i]
+		if type(component) ~= "number" or component ~= component or math.abs(component) > Validate.MAX_COMPONENT then
+			return false
+		end
+	end
+	return true
+end
+
+--- Config.SHOT'tan geçerli vuruş türü kümesi (set) üretir.
+function Validate.shotTypeSet(shotConfig)
+	local allowed = {}
+	local types = shotConfig and shotConfig.types
+	if type(types) == "table" then
+		for _, typeName in ipairs(types) do
+			if type(typeName) == "string" then
+				allowed[typeName] = true
+			end
+		end
+	end
+	allowed[Validate.DEFAULT_SHOT_TYPE] = true
+	return allowed
+end
+
+--- Vuruş türü beyaz listede mi? Değilse varsayılan tür.
+-- `allowed` verilmezse Validate.shotTypeSet(nil) ile üretilen tek üyeli küme kullanılır.
+function Validate.shotType(value, allowed)
+	local set = allowed or Validate.shotTypeSet(nil)
+	if type(value) == "string" and set[value] then
+		return value
+	end
+	return Validate.DEFAULT_SHOT_TYPE
+end
+
+--- Ayak: yalnızca "L" veya "R". Diğer her şey nil -> animasyon otomatik seçer.
+-- nil dönüşü bir hata değil, KickAnim'in topun yanına göre ayak seçtiği sözleşmedir.
+function Validate.foot(value)
+	if value == "L" or value == "R" then
+		return value
+	end
+	return nil
+end
+
+return Validate
 ]=] },
 	["shared/Core/Vec3"] = { class = "ModuleScript", source = [=[
 --[[
@@ -3660,7 +3890,10 @@ function Keeper:step(ball, dt)
 
 	-- Top kaleye mi geliyor?
 	local towardGoal = ball.vel.x * self.side > 2.5
-	local distanceToLine = (self.side * P.halfLength) - ball.pos.x
+	-- Kale çizgisine kalan mesafe (her iki kale tarafında da pozitif).
+	-- Eski formül ((side * halfLength) - pos.x) side=-1'de NEGATIF oluyordu:
+	-- batı kalesindeki kaleci hiç dalmıyordu (ayna tarafı ölüydü).
+	local distanceToLine = P.halfLength - self.side * ball.pos.x
 
 	local targetZ = 0
 	local wantDive = false
@@ -3708,9 +3941,15 @@ function Keeper:step(ball, dt)
 
 	if wantDive then
 		if self.state ~= "dive" then
-			-- Dalış başlıyor: animasyon için hedefi kilitle
+			-- Dalış başlıyor: animasyon için hedefi kilitle.
+			-- ÖNEMLİ — eksen dönüşümü: KeeperAnim'in sözleşmesi KALECİNİN KENDİ
+			-- eksenidir ("+dz = kalecinin sağı"). Oysa targetZ - pos.z DÜNYA z farkıdır.
+			-- Kaleci -X'e bakar (side=+1): sağı dünyanın -Z'sidir; +X'e bakar
+			-- (side=-1): sağı dünyanın +Z'si. Dünya farkını olduğu gibi verirsek
+			-- dalış topun TERSİNE yatar (görülen hata buydu). -side çarpanı dünya
+			-- eksenini kalecinin yerel eksenine çevirir.
 			self.diveTarget = {
-				dz = targetZ - self.pos.z,
+				dz = -self.side * (targetZ - self.pos.z),
 				height = (self.arrival and self.arrival.y) or 0.5,
 				speed = ball:speed(),
 				time = (self.arrival and self.arrival.t) or 1,
@@ -4312,9 +4551,28 @@ local LINE_Y = 0.03 -- çim üstünden yükseklik (stud)
 -- Lua 5.3: math.atan(y, x) | Luau: math.atan2(y, x)
 local atan2 = math.atan2 or math.atan
 
+-- Kardeş adları BENZERSİZ olmalı. Roblox'ta aynı ada sahip iki çocuk yasaldir ama
+-- `FindFirstChild("PenaltyAreaSide")` hangisini döndürdüğü belirsizdir ve Studio
+-- ağacı okunmaz olur. Çizgilerde simetrik çiftler (kuzey/güney ceza sahası kenarı,
+-- iki kale tarafı) aynı mantıksal adı paylaşır; çakışmaya sayaç eklenir.
+-- build() eski FootballPitch'i yok ettiği için adlar her kurulumda deterministiktir.
+local function uniqueName(parent, name)
+	if parent == nil then
+		return name
+	end
+	if parent:FindFirstChild(name) == nil then
+		return name
+	end
+	local suffix = 2
+	while parent:FindFirstChild(name .. tostring(suffix)) ~= nil do
+		suffix = suffix + 1
+	end
+	return name .. tostring(suffix)
+end
+
 local function makePart(parent, name, sizeStuds, cframe, color, material, opts)
 	local p = Instance.new("Part")
-	p.Name = name
+	p.Name = uniqueName(parent, name)
 	p.Anchored = true
 	p.Size = sizeStuds
 	p.CFrame = cframe
@@ -4397,7 +4655,7 @@ local function buildSurface(root, opts)
 		"Grass",
 		Vector3.new(width * S, 2, P.width * S),
 		CFrame.new(centerX * S, -0.98, 0), -- üst yüz y=0.02: varsayılan Baseplate ile z-fighting olmaz
-		Color3.fromRGB(38, 104, 56),
+		Color3.fromRGB(42, 112, 60),
 		Enum.Material.Grass,
 		{ collide = true }
 	)
@@ -4412,7 +4670,9 @@ local function buildSurface(root, opts)
 			"Stripe" .. tostring(i),
 			Vector3.new(w * S, 0.02, P.width * S),
 			CFrame.new(v3(x, 0.001, 0)),
-			i % 2 == 0 and Color3.fromRGB(44, 116, 62) or Color3.fromRGB(40, 108, 58),
+			-- Biçim şeritleri uzaktan da seçilsin diye kontrastlı (eski fark %4'tü,
+			-- ekran görüntüsünde çim tek düz bir yeşil gibi görünüyordu)
+			i % 2 == 0 and Color3.fromRGB(56, 138, 74) or Color3.fromRGB(38, 104, 56),
 			Enum.Material.Grass,
 			{ castShadow = false }
 		)
@@ -4460,22 +4720,32 @@ local function buildLines(root, opts)
 
 	-- Ceza sahası / kale sahası / penaltı noktası
 	local sides = opts.half and { 1 } or { -1, 1 }
+	-- Tam sahada iki taraf da aynı çizgileri çizer; ada taraf etiketi (East/West)
+	-- ve simetri etiketi (North/South) eklenir ki hiçbir kardeş adı çakışmasın.
 	for _, side in ipairs(sides) do
 		local gl = side * HL
 		local paX = gl - side * P.penaltyAreaLength
 		local gaX = gl - side * P.goalAreaLength
+		local sideTag = side > 0 and "East" or "West"
 
-		drawLine(folder, "PenaltyAreaLine", paX, -P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
-		drawLine(folder, "PenaltyAreaSide", gl, -P.penaltyAreaHalfWidth, paX, -P.penaltyAreaHalfWidth)
-		drawLine(folder, "PenaltyAreaSide", gl, P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaLine" .. sideTag, paX, -P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaSide" .. sideTag .. "North", gl, -P.penaltyAreaHalfWidth, paX, -P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaSide" .. sideTag .. "South", gl, P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
 
-		drawLine(folder, "GoalAreaLine", gaX, -P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
-		drawLine(folder, "GoalAreaSide", gl, -P.goalAreaHalfWidth, gaX, -P.goalAreaHalfWidth)
-		drawLine(folder, "GoalAreaSide", gl, P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaLine" .. sideTag, gaX, -P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaSide" .. sideTag .. "North", gl, -P.goalAreaHalfWidth, gaX, -P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaSide" .. sideTag .. "South", gl, P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
+
+		-- Ceza yayı ("D"): penaltı noktası merkezli 9.15 m, yalnızca ceza sahası
+		-- çizgisinin DIŞINDA kalan kavıs (gerçek saha işareti)
+		local arcPhi = math.acos(5.5 / 9.15)
+		local arcMid = side > 0 and math.pi or 0
+		drawArc(folder, "PenaltyArc" .. sideTag, gl - side * P.penaltySpot, 0, 9.15,
+			arcMid - arcPhi, arcMid + arcPhi, 14)
 
 		makePart(
 			folder,
-			"PenaltySpot",
+			"PenaltySpot" .. sideTag,
 			Vector3.new(0.22 * S, 0.05, 0.22 * S),
 			CFrame.new(v3(gl - side * P.penaltySpot, LINE_Y / S, 0)),
 			Color3.fromRGB(246, 250, 252),
@@ -4497,10 +4767,12 @@ local function buildGoal(parent, side)
 	goalFolder.Parent = parent
 
 	-- Yan direkler (silindir ekseni X'tir; dikey yapmak için Z'de 90°)
+	-- Adlar bilerek Kuzey/Güney: iki direk aynı mantıksal parçanın simetriği, ama
+	-- aynı Name ile FindFirstChild belirsizleşirdi (bkz. uniqueName).
 	for _, sz in ipairs({ -1, 1 }) do
 		makePart(
 			goalFolder,
-			"Post",
+			"Post" .. (sz < 0 and "North" or "South"),
 			Vector3.new(P.goalHeight * S, postDia * S, postDia * S),
 			CFrame.new(v3(gl, P.goalHeight / 2, sz * P.goalHalfWidth)) * CFrame.Angles(0, 0, math.rad(90)),
 			frameColor,
@@ -4538,7 +4810,7 @@ local function buildGoal(parent, side)
 	for _, sz in ipairs({ -1, 1 }) do
 		makePart(
 			goalFolder,
-			"NetSide",
+			"NetSide" .. (sz < 0 and "North" or "South"),
 			Vector3.new(P.goalDepth * S, P.goalHeight * S, 0.05 * S),
 			CFrame.new(((gl + backX) / 2) * S, (P.goalHeight / 2) * S, sz * P.goalHalfWidth * S),
 			netColor,
@@ -4588,7 +4860,12 @@ local function buildKeeper(root, side)
 	folder.Name = "Goalkeeper"
 	folder.Parent = root
 
-	local model = PartRig.build(folder, { name = "Rig", studsPerMeter = S })
+	-- Turuncu forma: yeşil sahada kaleci ilk bakışta seçilsin (beyaz/gri kayboluyordu)
+	local model = PartRig.build(folder, {
+		name = "Rig",
+		studsPerMeter = S,
+		kitColor = Color3.fromRGB(255, 152, 28),
+	})
 	local x = side * (P.halfLength - K.lineOffset)
 	model.x = x
 	model.side = side
@@ -4614,18 +4891,219 @@ local function buildStriker(root, side, startPos)
 	return model
 end
 
+-- Stadyum hissi: apron + tribün + reklam panosu + köşe flamaları + ışık kuleleri.
+-- Hepsi prosedürel (asset yok); parça adları sayaçla benzersizleşir.
+local BOARD_COLORS = {
+	Color3.fromRGB(24, 58, 138),
+	Color3.fromRGB(238, 242, 246),
+	Color3.fromRGB(168, 32, 44),
+	Color3.fromRGB(16, 104, 96),
+}
+local SEAT_COLORS = {
+	Color3.fromRGB(132, 30, 38),
+	Color3.fromRGB(30, 44, 74),
+}
+
+local function buildStand(parent, name, cx, cz, lengthStuds, alongZ, sideSign)
+	-- 4 kademeli tribün + arka duvar + çatı bandı
+	local concrete = Color3.fromRGB(92, 96, 104)
+	for i = 1, 4 do
+		local rise = i * 1.15
+		local off = (3.2 + i * 1.5) * sideSign
+		local size = alongZ
+			and Vector3.new(6 * S, 1.15, lengthStuds)
+			or Vector3.new(lengthStuds, 1.15, 6 * S)
+		local px = alongZ and cx + off or cx
+		local pz = alongZ and cz or cz + off
+		makePart(
+			parent,
+			name .. "Tier" .. tostring(i),
+			size,
+			CFrame.new(px, rise * S * 0.5 - 0.5, pz),
+			i % 2 == 1 and SEAT_COLORS[1] or SEAT_COLORS[2],
+			Enum.Material.SmoothPlastic,
+			{ castShadow = false }
+		)
+	end
+	-- Arka duvar ve çatı: silüet tribünü stadyum gibi gösterir
+	local wallOff = (3.2 + 5 * 1.5) * sideSign
+	local wallSize = alongZ and Vector3.new(1.2 * S, 7.5 * S, lengthStuds) or Vector3.new(lengthStuds, 7.5 * S, 1.2 * S)
+	makePart(
+		parent,
+		name .. "Wall",
+		wallSize,
+		CFrame.new(alongZ and cx + wallOff or cx, 3.2 * S, alongZ and cz or cz + wallOff),
+		concrete,
+		Enum.Material.Concrete,
+		{ castShadow = false }
+	)
+	makePart(
+		parent,
+		name .. "Roof",
+		alongZ and Vector3.new(8.5 * S, 0.35, lengthStuds) or Vector3.new(lengthStuds, 0.35, 8.5 * S),
+		CFrame.new(alongZ and cx + wallOff * 0.7 or cx, 6.6 * S, alongZ and cz or cz + wallOff * 0.7),
+		Color3.fromRGB(226, 230, 236),
+		Enum.Material.Metal,
+		{ castShadow = false }
+	)
+end
+
+local function buildSurround(root, opts)
+	local folder = Instance.new("Folder")
+	folder.Name = "Surround"
+	folder.Parent = root
+
+	local HL, HW = P.halfLength, P.halfWidth
+	local x0 = opts.half and 0 or -HL
+	local lenX = HL - x0
+	local cx = (x0 + HL) / 2
+
+	-- Apron: sahanın dışındaki gri boşluğu kapatır (ekrandaki "hiçlik" hissi)
+	makePart(
+		folder,
+		"Apron",
+		Vector3.new((lenX + 90) * S, 1.6, (P.width + 90) * S),
+		CFrame.new(cx * S, -1.05, 0),
+		Color3.fromRGB(30, 62, 40),
+		Enum.Material.Grass,
+		{ collide = false, castShadow = false }
+	)
+	makePart(
+		folder,
+		"Concourse",
+		Vector3.new((lenX + 46) * S, 1.2, (P.width + 46) * S),
+		CFrame.new(cx * S, -0.62, 0),
+		Color3.fromRGB(74, 78, 86),
+		Enum.Material.Concrete,
+		{ collide = false, castShadow = false }
+	)
+
+	-- Tribünler: kuzey/güney kenarları + kale arkası
+	buildStand(folder, "StandNorth", cx * S, -(HW + 12) * S, (lenX + 24) * S, false, -1)
+	buildStand(folder, "StandSouth", cx * S, (HW + 12) * S, (lenX + 24) * S, false, 1)
+	buildStand(folder, "StandEast", (HL + 14) * S, 0, (P.width + 24) * S, true, 1)
+	if not opts.half then
+		buildStand(folder, "StandWest", (-HL - 14) * S, 0, (P.width + 24) * S, true, -1)
+	end
+
+	-- Reklam panoları: saha çevresinde renkli bant (ölçek hissi verir)
+	local boardIndex = 0
+	local function board(name, cxm, czm, sxm, szm, rotY)
+		boardIndex = boardIndex + 1
+		local color = BOARD_COLORS[(boardIndex % #BOARD_COLORS) + 1]
+		makePart(
+			folder,
+			name .. tostring(boardIndex),
+			Vector3.new(sxm * S, 0.95, szm * S),
+			CFrame.new(cxm * S, 0.5, czm * S) * CFrame.Angles(0, rotY or 0, 0),
+			color,
+			Enum.Material.SmoothPlastic,
+			{ castShadow = false }
+		)
+	end
+	local longBoards = 10
+	for i = 1, longBoards do
+		local bx = x0 + lenX * ((i - 0.5) / longBoards)
+		board("AdBoardTouchN", bx, -(HW + 2.2), lenX / longBoards - 0.4, 0.14, 0)
+		board("AdBoardTouchS", bx, HW + 2.2, lenX / longBoards - 0.4, 0.14, 0)
+	end
+	local endBoards = 8
+	for i = 1, endBoards do
+		local bz = -HW + P.width * ((i - 0.5) / endBoards)
+		board("AdBoardEast", HL + 2.6, bz, 0.14, P.width / endBoards - 0.4, 0)
+		if not opts.half then
+			board("AdBoardWest", -HL - 2.6, bz, 0.14, P.width / endBoards - 0.4, 0)
+		else
+			board("AdBoardWest", x0 - 2.6, bz, 0.14, P.width / endBoards - 0.4, 0)
+		end
+	end
+
+	-- Köşe flamaları (yarım sahada 4 köşe)
+	local corners = {
+		{ x = x0, z = -HW, tag = "NW" },
+		{ x = x0, z = HW, tag = "SW" },
+		{ x = HL, z = -HW, tag = "NE" },
+		{ x = HL, z = HW, tag = "SE" },
+	}
+	if not opts.half then
+		corners[#corners + 1] = { x = -HL, z = -HW, tag = "WN" }
+		corners[#corners + 1] = { x = -HL, z = HW, tag = "WS" }
+	end
+	for _, c in ipairs(corners) do
+		makePart(
+			folder,
+			"FlagPole" .. c.tag,
+			Vector3.new(0.06 * S, 1.5, 0.06 * S),
+			CFrame.new(c.x * S, 0.75 * S, c.z * S),
+			Color3.fromRGB(244, 246, 250),
+			Enum.Material.SmoothPlastic,
+			{ castShadow = false }
+		)
+		makePart(
+			folder,
+			"Flag" .. c.tag,
+			Vector3.new(0.42, 0.3, 0.03),
+			CFrame.new(c.x * S + 0.21, 1.35 * S, c.z * S),
+			Color3.fromRGB(255, 214, 64),
+			Enum.Material.Neon,
+			{ castShadow = false }
+		)
+	end
+
+	-- Işık kuleleri: gökyüzüne silüet verir, gece modunda sahneyi taşır
+	local pylons = {
+		{ x = x0 - 8, z = -(HW + 9), tag = "NW" },
+		{ x = x0 - 8, z = HW + 9, tag = "SW" },
+		{ x = HL + 9, z = -(HW + 9), tag = "NE" },
+		{ x = HL + 9, z = HW + 9, tag = "SE" },
+	}
+	for _, py in ipairs(pylons) do
+		makePart(
+			folder,
+			"LightPole" .. py.tag,
+			Vector3.new(0.9, 16 * S, 0.9),
+			CFrame.new(py.x * S, 8 * S, py.z * S),
+			Color3.fromRGB(58, 62, 70),
+			Enum.Material.Metal,
+			{ castShadow = false }
+		)
+		makePart(
+			folder,
+			"LightHead" .. py.tag,
+			Vector3.new(4.5 * S, 2.2 * S, 0.5),
+			CFrame.new(py.x * S, 16.4 * S, py.z * S) * CFrame.Angles(0, 0, 0),
+			Color3.fromRGB(255, 246, 214),
+			Enum.Material.Neon,
+			{ castShadow = false }
+		)
+	end
+
+	return folder
+end
+
 local function setupLighting()
 	local Lighting = game:GetService("Lighting")
 	pcall(function()
-		Lighting.ClockTime = 15.5
-		Lighting.Brightness = 2.3
-		Lighting.Ambient = Color3.fromRGB(72, 82, 92)
-		Lighting.OutdoorAmbient = Color3.fromRGB(126, 136, 146)
-		Lighting.EnvironmentDiffuseScale = 0.45
-		Lighting.EnvironmentSpecularScale = 0.3
+		-- Altın saat: çim doygun, gölgeler uzun, ufuk sıcak (15.5 düz öğle ışığı
+		-- ekran görüntüsünde soluk ve gri duruyordu)
+		Lighting.ClockTime = 16.8
+		Lighting.Brightness = 2.6
+		Lighting.Ambient = Color3.fromRGB(84, 86, 92)
+		Lighting.OutdoorAmbient = Color3.fromRGB(142, 148, 156)
+		Lighting.EnvironmentDiffuseScale = 0.55
+		Lighting.EnvironmentSpecularScale = 0.35
 		Lighting.GlobalShadows = true
-		Lighting.ExposureCompensation = 0.1
+		Lighting.ExposureCompensation = 0.15
+		Lighting.FogEnd = 900
+		Lighting.FogColor = Color3.fromRGB(186, 199, 212)
 	end)
+
+	-- Gökyüzü: varsayılan gri ufuk yerine bulutlu mavi (Sky yoksa stüdyo boşluğu görünür)
+	if not Lighting:FindFirstChildOfClass("Sky") then
+		local sky = Instance.new("Sky")
+		sky.Name = "StadiumSky"
+		sky.Parent = Lighting
+	end
 
 	if not Lighting:FindFirstChildOfClass("Atmosphere") then
 		local atm = Instance.new("Atmosphere")
@@ -4635,6 +5113,28 @@ local function setupLighting()
 		atm.Color = Color3.fromRGB(199, 212, 224)
 		atm.Parent = Lighting
 	end
+
+	-- Hafif sunum efektleri: güneş ışınları + bloom + doygunluk
+	if not Lighting:FindFirstChildOfClass("SunRaysEffect") then
+		local rays = Instance.new("SunRaysEffect")
+		rays.Intensity = 0.32
+		rays.Spread = 0.7
+		rays.Parent = Lighting
+	end
+	if not Lighting:FindFirstChildOfClass("BloomEffect") then
+		local bloom = Instance.new("BloomEffect")
+		bloom.Intensity = 0.35
+		bloom.Size = 24
+		bloom.Threshold = 2.2
+		bloom.Parent = Lighting
+	end
+	if not Lighting:FindFirstChildOfClass("ColorCorrectionEffect") then
+		local cc = Instance.new("ColorCorrectionEffect")
+		cc.Saturation = 0.18
+		cc.Contrast = 0.06
+		cc.Brightness = 0.02
+		cc.Parent = Lighting
+	end
 end
 
 local function buildSpawn(root, x)
@@ -4642,7 +5142,9 @@ local function buildSpawn(root, x)
 	spawn.Name = "PitchSpawn"
 	spawn.Anchored = true
 	spawn.Size = Vector3.new(8, 1, 8)
-	spawn.CFrame = CFrame.new(x * S, 0.5, 0)
+	-- Oyuncu sahaya sırtı dönük doğmasın: -Z öne baktığı için -90° yaw ile +X'e
+	-- (kaleye) çeviriyoruz; ilk karede top ve kale kadrajda olur.
+	spawn.CFrame = CFrame.new(x * S, 0.5, 0) * CFrame.Angles(0, -math.rad(90), 0)
 	spawn.Color = Color3.fromRGB(60, 120, 200)
 	spawn.Material = Enum.Material.SmoothPlastic
 	spawn.Transparency = 1
@@ -4675,6 +5177,8 @@ function SceneBuilder.build(opts)
 
 	buildLines(root, { half = half })
 
+	buildSurround(root, { half = half })
+
 	local goalsFolder = Instance.new("Folder")
 	goalsFolder.Name = "Goals"
 	goalsFolder.Parent = root
@@ -4693,7 +5197,12 @@ function SceneBuilder.build(opts)
 	local ballStart = half and Vector3.new((P.halfLength * 0.40) * S, Config.BALL.radius * S, 0)
 		or Vector3.new(0, Config.BALL.radius * S, 0)
 	local strikerStart = Vec3.new(ballStart.X / S - 1.45, 0, 0.75)
-	local striker = buildStriker(root, goalSide, strikerStart)
+	-- Şutçu NPC kapalıysa sahaya MANKEN koymuyoruz: donuk duran bir oyuncu
+	-- "oynayan biri var" hissi verip kafa karıştırır. Sahada şutu atan sizsiniz.
+	local striker = nil
+	if Config.ANIM.strikerEnabled then
+		striker = buildStriker(root, goalSide, strikerStart)
+	end
 	setupLighting()
 
 	-- Doğma noktası: yarım sahada topun gerisinde (animasyonlar görüş alanında)
@@ -4748,19 +5257,11 @@ function SceneBuilder.updateStrikerModel(strikerModel, pose, pos, yaw, studsPerM
 end
 
 --[[ Kaleci görselinin dünya uzayındaki el noktaları (hata ayıklama/teşhis). ]]
-function SceneBuilder.keeperHands(keeperModel, pose, pos, studsPerMeter)
-	if not keeperModel then
-		return nil
-	end
-	local s = studsPerMeter or S
-	local solved = SceneBuilder.updateKeeperModel(keeperModel, pose, pos, s)
-	local out = {}
-	for _, side in ipairs({ "L", "R" }) do
-		local hand, forward, right, up = Rig.toWorld(solved.pos["hand" .. side], Vec3.new(pos.x * s, 0, pos.z * s), keeperYaw(keeperModel.side or 1), s)
-		out[side] = hand
-	end
-	return out
-end
+-- NOT: Burada daha önce `SceneBuilder.keeperHands` vardı: eldiven dünya
+-- konumlarını döndürüyordu ama HİÇBİR yerden çağrılmıyordu ve her çağrıda tüm
+-- kaleci pozunu yeniden çözüyordu (updateKeeperModel zaten aynı işi yapıyor ve
+-- eldivenleri yerleştiriyor). Ölü dışa aktarım olarak kaldırıldı; eldiven
+-- konumları PartRig + updateKeeperModel üzerinden tek yoldan gelir.
 
 return SceneBuilder
 ]=] },

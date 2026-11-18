@@ -886,13 +886,24 @@ test("sahne kuruldu: yarim saha, 1 kale, direkler, ag, kaleci, top", function()
 
 	local goal = goals:FindFirstChild("GoalEast")
 	check(goal ~= nil, "GoalEast yok")
+	-- İki direk artik AYIRT EDILEBILIR ada sahip (PostNorth / PostSouth): ayni
+	-- Name'i paylasan iki kardes FindFirstChild'i belirsizlestiriyordu.
 	local posts = 0
 	for _, child in ipairs(goal:GetChildren()) do
-		if child.Name == "Post" then
+		if child.Name == "PostNorth" or child.Name == "PostSouth" then
 			posts = posts + 1
 		end
 	end
 	check(posts == 2, "iki direk beklenirdi, gelen " .. tostring(posts))
+	check(goal:FindFirstChild("PostNorth") ~= nil, "PostNorth yok")
+	check(goal:FindFirstChild("PostSouth") ~= nil, "PostSouth yok")
+	local netSides = 0
+	for _, child in ipairs(goal:GetChildren()) do
+		if child.Name == "NetSideNorth" or child.Name == "NetSideSouth" then
+			netSides = netSides + 1
+		end
+	end
+	check(netSides == 2, "iki yan ag beklenirdi, gelen " .. tostring(netSides))
 	check(goal:FindFirstChild("Crossbar") ~= nil, "ust direk yok")
 	check(goal:FindFirstChild("NetBack") ~= nil, "arka ag yok")
 	check(goal:FindFirstChild("NetTop") ~= nil, "ust ag yok")
@@ -907,14 +918,41 @@ test("sahne kuruldu: yarim saha, 1 kale, direkler, ag, kaleci, top", function()
 	check(keeperRig:FindFirstChild("GloveL") ~= nil and keeperRig:FindFirstChild("GloveR") ~= nil, "kaleci eldivenleri yok")
 	check(#keeperRig:GetChildren() == 15, "iskelet 15 parca olmali (13 kemik + 2 eldiven), gelen " .. tostring(#keeperRig:GetChildren()))
 
+	-- Yeni varsayilan: sutu OYUNCU atar, NPC kapali -> sahada manken olmamali
 	local striker = pitch:FindFirstChild("Striker")
-	check(striker ~= nil, "sutcu modeli yok")
-	check(striker:FindFirstChild("Rig") ~= nil, "sutcu iskeleti yok")
+	check(striker == nil,
+		"varsayilanda sutcu NPC sahada olmamali (sutu oynayan oyuncu atar); Striker klasoru bulundu")
 
 	local ball = ws:FindFirstChild("MatchBall")
 	check(ball ~= nil, "top yok")
 	check(ball.Shape == "PartType.Ball", "top sekli yanlis: " .. tostring(ball.Shape))
 	check(ball.CFrame.pos.X > 0, "top yarim saha icinde baslamiyor")
+end)
+
+test("sutcu NPC yalnizca demo kipinde sahaya kurulur (varsayilan: sutu oyuncu atar)", function()
+	local mock = RobloxMock.install()
+	local ok, err = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+	check(ok, "kurulum calismadi: " .. tostring(err))
+
+	local cfg = require(mock.replicatedStorage.Shared.Config)
+	check(cfg.ANIM.strikerEnabled == false,
+		"varsayilan strikerEnabled false olmali; aksi halde NPC oyuncudan rol calar")
+	local sb = require(mock.replicatedStorage.Shared.World.SceneBuilder)
+
+	cfg.ANIM.strikerEnabled = true
+	sb.build({})
+	local pitch = mock.workspace:FindFirstChild("FootballPitch")
+	local striker = pitch and pitch:FindFirstChild("Striker")
+	check(striker ~= nil, "strikerEnabled=true iken Striker kurulmadi")
+	check(striker:FindFirstChild("Rig") ~= nil, "sutcu iskeleti yok")
+
+	cfg.ANIM.strikerEnabled = false
+	sb.build({})
+	pitch = mock.workspace:FindFirstChild("FootballPitch")
+	check(pitch:FindFirstChild("Striker") == nil, "kapatinca Striker sahneden cikmali")
 end)
 
 test("kurulum tekrar calistirilinca cogaltmiyor (idempotent)", function()
@@ -937,6 +975,198 @@ test("kurulum tekrar calistirilinca cogaltmiyor (idempotent)", function()
 	check(#pitchAfter:GetChildren() > 0, "sahne silindi")
 	check(#pitchAfter:FindFirstChild("Goals"):GetChildren() == before, "kale klasorleri cogaldi")
 	check(#pitchAfter:FindFirstChild("Lines"):GetChildren() == lineCountBefore, "cizgiler cogaldi")
+end)
+
+-- Bir instance ağacında aynı adı paylaşan kardeşleri bulur. Roblox'ta ad tekrarı
+-- yasaldir ama FindFirstChild'ı belirsizleştirir ve Studio ağacını okunmaz yapar.
+local function duplicateSiblings(root)
+	local duplicates = {}
+	local visited = 0
+	local function walk(parent, path)
+		local seen = {}
+		for _, child in ipairs(parent:GetChildren()) do
+			visited = visited + 1
+			local childPath = path .. "/" .. child.Name
+			if seen[child.Name] then
+				duplicates[#duplicates + 1] = childPath
+			end
+			seen[child.Name] = true
+			walk(child, childPath)
+		end
+	end
+	walk(root, root.Name or "root")
+	return duplicates, visited
+end
+
+test("sahne agacinda cift kardes adi yok (FindFirstChild belirsiz degil)", function()
+	local mock = RobloxMock.install()
+	local ok, err = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+	check(ok, "kurulum calismadi: " .. tostring(err))
+
+	local pitch = mock.workspace:FindFirstChild("FootballPitch")
+	check(pitch ~= nil, "workspace.FootballPitch kurulmadi")
+
+	-- Yürüyüş gerçekten tüm ağacı gezdi mi? (yarım saha: yüzey + ~24 çizgi + yay
+	-- segmentleri + kale + 2 prosedürel iskelet + top ≈ 96 instance)
+	local duplicates, visited = duplicateSiblings(mock.workspace)
+	check(visited > 60, "sahne agaci beklenenden kucuk: " .. tostring(visited) .. " instance")
+	check(#duplicates == 0,
+		"ayni adi paylasan kardesler (FindFirstChild belirsiz): " .. table.concat(duplicates, ", "))
+
+	-- Somut örnek: ceza sahasının iki kenarı artık ayırt edilebilir
+	local lines = pitch:FindFirstChild("Lines")
+	check(lines ~= nil, "Lines klasoru yok")
+	local north = lines:FindFirstChild("PenaltyAreaSideEastNorth")
+	local south = lines:FindFirstChild("PenaltyAreaSideEastSouth")
+	check(north ~= nil, "PenaltyAreaSideEastNorth yok")
+	check(south ~= nil, "PenaltyAreaSideEastSouth yok")
+	check(north ~= south, "kuzey ve guney ceza sahasi kenari ayni parca")
+	local goal = pitch:FindFirstChild("Goals"):FindFirstChild("GoalEast")
+	check(goal:FindFirstChild("PostNorth") ~= goal:FindFirstChild("PostSouth"), "iki direk ayni parca")
+
+	-- Tam saha: iki kale + iki tarafın çizgileri → ad çakışması riski en yüksek kip
+	local okFull, errFull = pcall(function()
+		local sb = require(mock.replicatedStorage.Shared.World.SceneBuilder)
+		sb.build({ half = false })
+	end)
+	check(okFull, "tam saha kurulamadi: " .. tostring(errFull))
+	local fullPitch = mock.workspace:FindFirstChild("FootballPitch")
+	check(fullPitch ~= nil, "tam saha FootballPitch yok")
+	local goals = fullPitch:FindFirstChild("Goals")
+	check(goals and #goals:GetChildren() == 2,
+		"tam sahada iki kale beklenirdi, gelen " .. tostring(goals and #goals:GetChildren()))
+	local dupFull, visitedFull = duplicateSiblings(mock.workspace)
+	check(visitedFull > visited, "tam saha agaci yarim sahadan kucuk: " .. tostring(visitedFull))
+	check(#dupFull == 0,
+		"tam sahada ayni adi paylasan kardesler: " .. table.concat(dupFull, ", "))
+end)
+
+test("kaleci dalisi topun gittigi yana yatar (ters yonelmez)", function()
+	-- Dogu kalesi (side=+1): kaleci -X'e bakar, saga uzanmasi dünya -Z demektir.
+	-- Top dünya +Z tarafina gidiyorsa kaleci SOLUNA (yerel -dz) uzanmali ve
+	-- ellerinin dünya z'si POZITIF olmali.
+	local keeper = Keeper.new(Config, 1)
+	local ball = newBall(Vec3.new(35, 1.0, 0.6), Vec3.new(18, 0, 2.4))
+	local dt = Config.FIXED_DT
+	for _ = 1, math.floor(0.6 / dt) do
+		keeper:step(ball, dt)
+		ball:step(dt)
+	end
+	check(keeper.state == "dive", "dalis beklenirdi, gelen " .. tostring(keeper.state))
+	local target = keeper.diveTarget
+	check(target ~= nil, "diveTarget kilitlenmedi")
+	check(target.dz < 0,
+		"yerel dz isareti yanlis: " .. string.format("%.2f", target.dz) .. " (top +Z tarafinda, kaleci sağı -Z)")
+
+	-- Pozu kalecinin dünya yerlesimiyle çöz: eller topun tarafina uzanmali
+	local anim = KeeperAnim.new({ dz = target.dz, height = target.height, speed = target.speed })
+	local solved = Rig.solve(anim:sample(0.45).pose)
+	local yaw = math.atan(0, -1) -- keeperYaw(1)
+	local origin = Vec3.new(keeper.pos.x, 0, keeper.pos.z)
+	local handR = Rig.toWorld(solved.pos.handR, origin, yaw, 1)
+	local handL = Rig.toWorld(solved.pos.handL, origin, yaw, 1)
+	local handsZ = (handR.z + handL.z) / 2
+	check(handsZ > 0.35,
+		"eller topun tersine uzandi: ellerZ=" .. string.format("%.2f", handsZ) .. " m (top +Z tarafinda)")
+	local rootW = Rig.toWorld(solved.pos.root, origin, yaw, 1)
+	check(rootW.z > 0.15,
+		"gövde topun tersine yatti: rootZ=" .. string.format("%.2f", rootW.z))
+end)
+
+test("kaleci dalis yönü bati kalesinde de dogru (side=-1 aynasi)", function()
+	-- Bati kalesi: kaleci +X'e bakar, sağı dünya +Z'si. Top dünya +Z'ye gidiyorsa
+	-- yerel dz POZITIF, ellerin dünya z'si yine pozitif olmali.
+	local keeper = Keeper.new(Config, -1)
+	local ball = newBall(Vec3.new(-35, 1.0, 0.6), Vec3.new(-18, 0, 2.4))
+	local dt = Config.FIXED_DT
+	for _ = 1, math.floor(0.6 / dt) do
+		keeper:step(ball, dt)
+		ball:step(dt)
+	end
+	check(keeper.state == "dive", "dalis beklenirdi, gelen " .. tostring(keeper.state))
+	local target = keeper.diveTarget
+	check(target ~= nil, "diveTarget kilitlenmedi")
+	check(target.dz > 0,
+		"yerel dz isareti yanlis (bati): " .. string.format("%.2f", target.dz))
+	local anim = KeeperAnim.new({ dz = target.dz, height = target.height, speed = target.speed })
+	local solved = Rig.solve(anim:sample(0.45).pose)
+	local yaw = math.atan(0, 1) -- keeperYaw(-1)
+	local origin = Vec3.new(keeper.pos.x, 0, keeper.pos.z)
+	local handR = Rig.toWorld(solved.pos.handR, origin, yaw, 1)
+	local handL = Rig.toWorld(solved.pos.handL, origin, yaw, 1)
+	local handsZ = (handR.z + handL.z) / 2
+	check(handsZ > 0.35,
+		"bati kalesinde eller ters yana: ellerZ=" .. string.format("%.2f", handsZ))
+end)
+
+test("stadyum cevresi kuruluyor: tribun, pano, flama, isik kulesi, gokyuzu", function()
+	local mock = RobloxMock.install()
+	local ok, err = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+	check(ok, "kurulum calismadi: " .. tostring(err))
+
+	local pitch = mock.workspace:FindFirstChild("FootballPitch")
+	check(pitch ~= nil, "FootballPitch yok")
+	local surround = pitch:FindFirstChild("Surround")
+	check(surround ~= nil, "Surround klasoru yok (saha disi bosluk)")
+
+	local function count(prefix)
+		local n = 0
+		for _, child in ipairs(surround:GetChildren()) do
+			if child.Name:sub(1, #prefix) == prefix then
+				n = n + 1
+			end
+		end
+		return n
+	end
+
+	check(surround:FindFirstChild("Apron") ~= nil, "apron yok: saha disi gri bosluk gorunur")
+	check(count("StandNorth") >= 5, "kuzey tribunu eksik: " .. tostring(count("StandNorth")))
+	check(count("StandSouth") >= 5, "guney tribunu eksik: " .. tostring(count("StandSouth")))
+	check(count("StandEast") >= 5, "kale arkasi tribunu eksik: " .. tostring(count("StandEast")))
+	check(count("AdBoard") >= 28, "reklam panolari eksik: " .. tostring(count("AdBoard")))
+	check(count("FlagPole") == 4, "kose flamasi diregi 4 olmali: " .. tostring(count("FlagPole")))
+	local flags = 0
+	for _, child in ipairs(surround:GetChildren()) do
+		-- "FlagNW" say, "FlagPoleNW" sayma (on-ek cakismasi)
+		if child.Name:sub(1, 4) == "Flag" and child.Name:sub(5, 8) ~= "Pole" then
+			flags = flags + 1
+		end
+	end
+	check(flags == 4, "kose flamasi 4 olmali: " .. tostring(flags))
+	check(count("LightPole") == 4, "isik kulesi 4 olmali: " .. tostring(count("LightPole")))
+	check(count("LightHead") == 4, "isik kafasi 4 olmali: " .. tostring(count("LightHead")))
+
+	-- Ceza yayi ("D") Lines klasorunde olmali
+	local lines = pitch:FindFirstChild("Lines")
+	local arc = 0
+	for _, child in ipairs(lines:GetChildren()) do
+		if child.Name:sub(1, 10) == "PenaltyArc" then
+			arc = arc + 1
+		end
+	end
+	check(arc >= 10, "ceza yayi segmentleri eksik: " .. tostring(arc))
+
+	-- Sunum katmani: gokyuzu + altin saat + efektler
+	local Lighting = game:GetService("Lighting")
+	check(Lighting:FindFirstChildOfClass("Sky") ~= nil, "Sky yok: ufuk gri stüdyo boslugu kalir")
+	check(Lighting:FindFirstChildOfClass("SunRaysEffect") ~= nil, "SunRaysEffect yok")
+	check(Lighting:FindFirstChildOfClass("BloomEffect") ~= nil, "BloomEffect yok")
+	check(Lighting:FindFirstChildOfClass("ColorCorrectionEffect") ~= nil, "ColorCorrectionEffect yok")
+	check(Lighting.ClockTime >= 16 and Lighting.ClockTime <= 17.5,
+		"altin saat disinda isik: ClockTime=" .. tostring(Lighting.ClockTime))
+
+	-- Kaleci turuncu formayla ayirt edilmeli
+	local keeperRig = pitch:FindFirstChild("Goalkeeper"):FindFirstChild("Rig")
+	local torso = keeperRig:FindFirstChild("Torso")
+	check(torso ~= nil and torso.Color ~= nil, "kaleci govdesi yok")
+	check(torso.Color.R > 0.8 and torso.Color.G > 0.4 and torso.Color.B < 0.3,
+		"kaleci formasi turuncu degil (sahada secilmiyor)")
 end)
 
 print("\n== 9. Prosedurel animasyon (kod ile, asset yok) ==")
@@ -1187,6 +1417,14 @@ test("sunucu dongusu kurulup 24 s boyunca hatasiz calisiyor", function()
 	end)
 	check(installOk, "kurulum calismadi: " .. tostring(installErr))
 
+	-- Yeni varsayilan: NPC sutcu kapali (sutu oyuncu atar). Bu test NPC'nin
+	-- yurume/sut animasyonunu da olctugu icin demo kipini BILEREK acar ve sahneyi
+	-- SimLoop calismadan ONCE yeniden kurar (strikerModel acilista baglanir).
+	local liveCfg = require(liveMock.replicatedStorage.Shared.Config)
+	liveCfg.ANIM.strikerEnabled = true
+	local liveSB = require(liveMock.replicatedStorage.Shared.World.SceneBuilder)
+	liveSB.build({})
+
 	local server = liveMock.serverScriptService:FindFirstChild("Server")
 	check(server ~= nil, "Server klasoru yok")
 	local simLoop = server:FindFirstChild("SimLoop")
@@ -1303,8 +1541,813 @@ test("kaleci modeli dalista alcaliyor (govde yuksekligi degisiyor)", function()
 		"govde hic alcalmadi: min y = " .. string.format("%.2f m", live.minTorsoY))
 end)
 
+
+print("\n== 11. İstemci (BallView) — sahte Roblox istemci ortamı ==")
+
+--[[ Grup 11/12 neden var?
+	Kurulum dosyası, SceneBuilder ve SimLoop zaten sahte Roblox ortamında
+	çalıştırılıyordu; ama İSTEMCİ scripti (BallView) hiç çalıştırılmıyordu:
+	342 satır kod yalnızca sözdizimi denetiminden geçiyordu. Bu yüzden
+	"şut tuşu bırakılınca hiçbir şey olmuyor" gibi bir hata testte yakalanamazdı.
+	Aşağıda istemci gerçek Roblox akışıyla çalıştırılıyor: karakter + kamera +
+	UserInputService + RenderStepped + RemoteEvent döngüsü (FireServer ->
+	OnServerEvent). ]]
+
+local STUDS_PER_METER = 3.5714
+
+-- Tam dünya: kurulum dosyası + SimLoop (sunucu) + BallView (istemci)
+local function bootWorld(opts)
+	opts = opts or {}
+	local mock = RobloxMock.install()
+	local logs = {}
+	local realPrint = print
+	print = function(...)
+		local parts = {}
+		for i = 1, select("#", ...) do
+			parts[i] = tostring(select(i, ...))
+		end
+		logs[#logs + 1] = table.concat(parts, " ")
+	end
+
+	local okInstall, errInstall = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+
+	local server = mock.serverScriptService:FindFirstChild("Server")
+	local simLoop = server and server:FindFirstChild("SimLoop")
+	local okServer, errServer = false, "SimLoop bulunamadi"
+	if simLoop then
+		okServer, errServer = pcall(function()
+			local chunk = assert(load(simLoop.Source, "@SimLoop"))
+			chunk()
+		end)
+	end
+
+	-- Şutçu NPC'yi kapat: oyuncunun kendi şutunu izole ölçmek için
+	if opts.striker == false then
+		local sharedConfig = require(mock.replicatedStorage.Shared.Config)
+		sharedConfig.ANIM.strikerEnabled = false
+	end
+
+	local okClient, errClient = true, nil
+	if opts.client ~= false then
+		local clientFolder = mock.starterPlayerScripts:FindFirstChild("Client")
+		local ballView = clientFolder and clientFolder:FindFirstChild("BallView")
+		if not ballView then
+			okClient, errClient = false, "StarterPlayerScripts.Client.BallView yok"
+		else
+			okClient, errClient = pcall(function()
+				local chunk = assert(load(ballView.Source, "@BallView"))
+				chunk()
+			end)
+		end
+	end
+
+	print = realPrint
+
+	local world = {
+		mock = mock,
+		logs = logs,
+		installOk = okInstall,
+		installErr = errInstall,
+		serverOk = okServer,
+		serverErr = errServer,
+		clientOk = okClient,
+		clientErr = errClient,
+	}
+	world.ball = mock.workspace:FindFirstChild("MatchBall")
+	world.ballStart = world.ball and world.ball.Position
+	world.hud = mock.localPlayer:FindFirstChild("PlayerGui")
+		and mock.localPlayer:FindFirstChild("PlayerGui"):FindFirstChild("FootballHud")
+	world.hrp = mock.localPlayer.Character:FindFirstChild("HumanoidRootPart")
+	world.humanoid = mock.localPlayer.Character:FindFirstChild("Humanoid")
+	world.camera = mock.camera
+	world.remotes = mock.replicatedStorage:FindFirstChild("Remotes")
+	world.kickRemote = world.remotes and world.remotes:FindFirstChild("Kick")
+	world.resetRemote = world.remotes and world.remotes:FindFirstChild("ResetBall")
+	world.stateRemote = world.remotes and world.remotes:FindFirstChild("MatchState")
+	world.stepped = 0
+	return world
+end
+
+-- Hem sunucu (Heartbeat) hem istemci (RenderStepped) karelerini birlikte sür.
+local function stepWorld(world, seconds, dt)
+	dt = dt or 1 / 60
+	local frames = math.floor(seconds / dt)
+	local errs = {}
+	local ball = world.ball
+	local prev = ball and ball.Position
+	local maxSpeed, launches, prevSpeed, frameIndex = 0, 0, 0, 0
+	for _ = 1, frames do
+		frameIndex = frameIndex + 1
+		local ok, err = pcall(function()
+			world.mock.runService.Heartbeat:Fire(dt)
+			world.mock.runService.RenderStepped:Fire(dt)
+		end)
+		if not ok then
+			errs[#errs + 1] = tostring(err)
+		end
+		if ball then
+			local cur = ball.Position
+			local dx, dy, dz = cur.X - prev.X, cur.Y - prev.Y, cur.Z - prev.Z
+			local speed = math.sqrt(dx * dx + dy * dy + dz * dz) / dt / STUDS_PER_METER
+			-- Gol sonrasi sifirlama topu baslangica ISINLAR (tek karede ~30 m):
+			-- bu fiziksel bir hiz degil, o kareyi olcumlere saymiyoruz.
+			local teleport = speed > 60
+			if not teleport then
+				if speed > maxSpeed then
+					maxSpeed = speed
+				end
+				-- Ilk karede "onceki hiz" bilinmiyor (pencere disinda ucu yor):
+				-- launch sayaci ikinci kareden itibaren anlamlidir.
+				if frameIndex > 1 and speed - prevSpeed > 3 then
+					launches = launches + 1
+				end
+			end
+			prevSpeed = teleport and 0 or speed
+			prev = cur
+		end
+	end
+	world.stepped = world.stepped + seconds
+	return { frames = frames, errors = errs, maxSpeed = maxSpeed, launches = launches }
+end
+
+-- Oyuncuyu topun `behind` metre gerisine, kaleye bakar şekilde yerleştir.
+local function placePlayerAtBall(world, behind)
+	behind = behind or 0.8
+	local bp = world.ball.Position
+	local pos = Vector3.new(bp.X - behind * STUDS_PER_METER, bp.Y, bp.Z)
+	world.hrp.CFrame = CFrame.lookAt(pos, pos + Vector3.new(10, 0, 0))
+	world.hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	return pos
+end
+
+-- Topu bilinen bir duruma al: gol sonrasi 2.4 s'lik reset zamanlayicisini
+-- bosalt, ResetBall remote'uyla baslangica isinla, kisa sure oturmasini bekle.
+local function settleBall(world)
+	stepWorld(world, 2.6)
+	if world.resetRemote then
+		world.resetRemote.OnServerEvent:Fire(nil)
+	end
+	local res = stepWorld(world, 0.4)
+	return res
+end
+
+local function hintText(world)
+	local label = world.hud and world.hud:FindFirstChild("Hint")
+	return label and label.Text or nil
+end
+
+local function findRemoteCall(world, fromIndex, remoteName, direction)
+	for i = math.max(1, fromIndex or 1), #world.mock.remoteLog do
+		local entry = world.mock.remoteLog[i]
+		if entry.name == remoteName and (not direction or entry.direction == direction) then
+			return entry, i
+		end
+	end
+	return nil
+end
+
+local clientWorld = nil
+
+test("istemci scripti sahte Roblox ortaminda hatasiz calisiyor", function()
+	clientWorld = bootWorld({ striker = false })
+	check(clientWorld.installOk, "kurulum dosyasi hata verdi: " .. tostring(clientWorld.installErr))
+	check(clientWorld.serverOk, "SimLoop hata verdi: " .. tostring(clientWorld.serverErr))
+	check(clientWorld.clientOk, "BallView (istemci) hata verdi: " .. tostring(clientWorld.clientErr))
+	check(clientWorld.ball ~= nil, "MatchBall yok")
+	check(clientWorld.remotes ~= nil, "ReplicatedStorage.Remotes yok (istemci bunu bekliyor)")
+	check(clientWorld.kickRemote ~= nil and clientWorld.resetRemote ~= nil and clientWorld.stateRemote ~= nil,
+		"remote'lardan biri yok: Kick/ResetBall/MatchState")
+end)
+
+test("istemci HUD + top kopyasi + nisan isareti kuruyor, sunucu topunu gizliyor", function()
+	check(clientWorld ~= nil and clientWorld.clientOk, "istemci calismadi")
+	local mock = clientWorld.mock
+	local hud = clientWorld.hud
+	check(hud ~= nil, "PlayerGui.FootballHud yok")
+	check(hud:FindFirstChild("Hint") ~= nil, "Hint etiketi yok")
+	check(hud:FindFirstChild("ChargeBar") ~= nil, "ChargeBar yok")
+	check(hud:FindFirstChild("Score") ~= nil, "Score etiketi yok")
+	local bar = hud:FindFirstChild("ChargeBar")
+	check(bar:FindFirstChild("ChargeFill") ~= nil, "ChargeFill yok")
+	check(bar.Visible == false, "guc bari baslangicta gorunur olmamali")
+
+	local serverBall = clientWorld.ball
+	check(serverBall.LocalTransparencyModifier == 1,
+		"sunucu topu lokal gizlenmedi (LocalTransparencyModifier=" ..
+		tostring(serverBall.LocalTransparencyModifier) .. ")")
+
+	local visual = mock.workspace:FindFirstChild("MatchBallVisual")
+	check(visual ~= nil, "istemci top kopyasi (MatchBallVisual) yok")
+	check(visual.Anchored == true, "kopya Anchored degil")
+	check(visual.CanCollide == false, "kopya CanCollide=true (fizigi bozar)")
+	check(visual.CanQuery == false, "kopya CanQuery=true (isınları bozar)")
+	check(visual.LocalTransparencyModifier == 0, "kopya gorunmez kaldi")
+	check(visual:FindFirstChildOfClass("Trail") ~= nil, "kopyada Trail yok")
+
+	check(mock.workspace:FindFirstChild("AimMarker") ~= nil, "nisan isareti (AimMarker) yok")
+
+	local ballCount = 0
+	for _, child in ipairs(mock.workspace:GetChildren()) do
+		if child.Name == "MatchBall" then
+			ballCount = ballCount + 1
+		end
+	end
+	check(ballCount == 1, "MatchBall cogaldi: " .. tostring(ballCount))
+end)
+
+test("kamera karakterin arkasinda, kaleye bakiyor ve Scriptable", function()
+	local mock = clientWorld.mock
+	local res = stepWorld(clientWorld, 1.0)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(clientWorld.camera.CameraType == "CameraType.Scriptable",
+		"CameraType Scriptable degil: " .. tostring(clientWorld.camera.CameraType))
+	local camPos = clientWorld.camera.CFrame.Position
+	local hrpPos = clientWorld.hrp.Position
+	check(camPos.X < hrpPos.X, "kamera karakterin onunde (x=" .. string.format("%.1f", camPos.X) .. ")")
+	check(camPos.Y > hrpPos.Y, "kamera yukarida degil")
+	check(clientWorld.camera.CFrame.LookVector.X > 0.2,
+		"kamera kaleye (+x) bakmiyor: LookVector.X=" ..
+		string.format("%.2f", clientWorld.camera.CFrame.LookVector.X))
+	-- Nisan isareti kale duzleminde olmali
+	local marker = mock.workspace:FindFirstChild("AimMarker")
+	local mp = marker.Position
+	local goalPlane = 52.5 * STUDS_PER_METER
+	check(math.abs(mp.X - goalPlane) < 0.5,
+		"nisan isareti kale duzleminde degil: x=" .. string.format("%.1f", mp.X))
+	check(math.abs(mp.Z) <= 3.3 * STUDS_PER_METER + 0.01, "nisan z siniri asildi: " .. string.format("%.1f", mp.Z))
+	check(mp.Y >= 0.25 * STUDS_PER_METER - 0.01 and mp.Y <= 2.3 * STUDS_PER_METER + 0.01,
+		"nisan y siniri asildi: " .. string.format("%.1f", mp.Y))
+	check(marker.Transparency < 1, "nisan isareti gorunmez (hesaplama nil dondu)")
+end)
+
+test("istemci kopyasi sunucu topunu izliyor (yumusatma yakinsiyor)", function()
+	local visual = clientWorld.mock.workspace:FindFirstChild("MatchBallVisual")
+	local res = stepWorld(clientWorld, 1.0)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	local d = visual.Position - clientWorld.ball.Position
+	local dist = math.sqrt(d.X * d.X + d.Y * d.Y + d.Z * d.Z)
+	check(dist < 1.0, "kopya sunucu topuna yakinsamadi: " .. string.format("%.2f stud", dist))
+end)
+
+test("V izleme kipi kamerayi topun arkasina aliyor", function()
+	local before = clientWorld.camera.CFrame.Position
+	clientWorld.mock.pressKey("V")
+	local res = stepWorld(clientWorld, 1.5)
+	check(#res.errors == 0, "V sonrasi kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	local ballPos = clientWorld.ball.Position
+	local camPos = clientWorld.camera.CFrame.Position
+	-- spectator: desiredPos = top + (-26, 15, 7) stud
+	local ex, ey, ez = ballPos.X - 26, ballPos.Y + 15, ballPos.Z + 7
+	local err = math.sqrt((camPos.X - ex) ^ 2 + (camPos.Y - ey) ^ 2 + (camPos.Z - ez) ^ 2)
+	check(err < 4.0, "izleme kipi kamerasi hedefte degil (hata " .. string.format("%.1f stud", err) .. ")")
+	check(math.abs(camPos.X - before.X) > 1.0 or math.abs(camPos.Y - before.Y) > 1.0,
+		"V kamera konumunu degistirmedi")
+	clientWorld.mock.pressKey("V") -- geri al
+	stepWorld(clientWorld, 0.2)
+end)
+
+test("T vurus turunu, F ayagi degistiriyor ve HUD metni guncelleniyor", function()
+	local first = hintText(clientWorld)
+	check(type(first) == "string" and #first > 10, "Hint metni yok")
+	check(first:find("Plase", 1, true) ~= nil, "baslangic vurus turi Plase degil: " .. tostring(first))
+	check(first:find("ayak: R", 1, true) ~= nil, "baslangic ayagi R degil: " .. tostring(first))
+
+	clientWorld.mock.pressKey("T")
+	local second = hintText(clientWorld)
+	check(second ~= first, "T vurus turunu degistirmedi")
+	check(second:find("Duz ayak", 1, true) ~= nil or second:find("Düz ayak", 1, true) ~= nil,
+		"T sonrasi tur 'Duz ayak' olmadi: " .. tostring(second))
+
+	clientWorld.mock.pressKey("F")
+	local third = hintText(clientWorld)
+	check(third:find("ayak: L", 1, true) ~= nil, "F ayagi L yapmadi: " .. tostring(third))
+
+	clientWorld.mock.pressKey("T")
+	clientWorld.mock.pressKey("F")
+	local fourth = hintText(clientWorld)
+	check(fourth:find("ayak: R", 1, true) ~= nil, "F ikinci kez ayagi R yapmadi: " .. tostring(fourth))
+end)
+
+test("SPACE basili tutunca guc bari doluyor", function()
+	local bar = clientWorld.hud:FindFirstChild("ChargeBar")
+	local fill = bar:FindFirstChild("ChargeFill")
+	placePlayerAtBall(clientWorld, 0.8)
+	stepWorld(clientWorld, 0.2)
+	check(bar.Visible == false, "guc bari baslamadan gorunur")
+	clientWorld.mock.pressKey("Space")
+	check(bar.Visible == true, "SPACE basinca guc bari gorunur olmadi")
+	local res = stepWorld(clientWorld, 0.45)
+	check(#res.errors == 0, "guc dolarken hata: " .. table.concat(res.errors, " | "))
+	local scale = fill.Size.X.Scale
+	check(scale > 0.35 and scale < 0.70,
+		"0.45 s'de guc ~0.5 olmaliydi, gelen " .. string.format("%.2f", scale))
+	-- Nisan rengi degismeli (sari)
+	local marker = clientWorld.mock.workspace:FindFirstChild("AimMarker")
+	-- Color3 bilesenleri gercek Roblox'taki gibi 0..1: sararma (255,220,90) -> R~1, G~0.86
+	check(marker.Color.G > 0.75 and marker.Color.R > 0.9, "nisan isareti sararmadi (charging gorunumu)")
+end)
+
+test("SPACE birakinca sut istegi sunucuya gidiyor (5 arguman, sinirli degerler)", function()
+	local bar = clientWorld.hud:FindFirstChild("ChargeBar")
+	local before = #clientWorld.mock.remoteLog
+	clientWorld.mock.releaseKey("Space")
+	local entry = findRemoteCall(clientWorld, before + 1, "Kick", "FireServer")
+	check(entry ~= nil, "InputEnded bagli degil: birakinca Kick gonderilmedi (sut atilamaz!)")
+	check(entry.argCount == 5,
+		"Kick 5 arguman gostermeli (charge, aimZ, aimY, shotType, foot), gelen " .. tostring(entry.argCount))
+	local charge, aimZ, aimY, shotType, foot = table.unpack(entry.args)
+	check(type(charge) == "number" and charge >= 0 and charge <= 1,
+		"charge [0,1] olmali: " .. tostring(charge))
+	check(charge > 0.3, "guc barindan gelen charge dusuk: " .. tostring(charge))
+	check(type(aimZ) == "number" and aimZ >= -3.35 and aimZ <= 3.35, "aimZ sinir disi: " .. tostring(aimZ))
+	check(type(aimY) == "number" and aimY >= 0.2 and aimY <= 2.35, "aimY sinir disi: " .. tostring(aimY))
+	check(type(shotType) == "string", "shotType string degil: " .. tostring(shotType))
+	check(foot == "L" or foot == "R", "foot L/R degil: " .. tostring(foot))
+	check(bar.Visible == false, "birakinca guc bari gizlenmedi")
+	check(bar:FindFirstChild("ChargeFill").Size.X.Scale == 0, "guc bari sifirlanmadi")
+end)
+
+test("R topu sifirliyor (ResetBall remote)", function()
+	-- Once topu hareket ettir: sut uctu, simdi sifirlama gerekli olmali
+	local res0 = stepWorld(clientWorld, 0.6)
+	check(#res0.errors == 0, "kare dongusu hata verdi: " .. table.concat(res0.errors, " | "))
+	local before = #clientWorld.mock.remoteLog
+	clientWorld.mock.pressKey("R")
+	local entry = findRemoteCall(clientWorld, before + 1, "ResetBall", "FireServer")
+	check(entry ~= nil, "R ResetBall gondermedi")
+	local res = stepWorld(clientWorld, 0.3)
+	check(#res.errors == 0, "reset sonrasi hata: " .. table.concat(res.errors, " | "))
+	local d = clientWorld.ball.Position - clientWorld.ballStart
+	local dist = math.sqrt(d.X * d.X + d.Y * d.Y + d.Z * d.Z)
+	check(dist < 1.0, "top baslangica donmedi: " .. string.format("%.2f stud uzakta", dist))
+end)
+
+test("ziplama kapatildi (SPACE sut icin ayrilmis)", function()
+	local enabled = clientWorld.humanoid:GetStateEnabled(Enum.HumanoidStateType.Jumping)
+	check(enabled == false,
+		"Humanoid Jumping durumu kapatilmamis: SPACE basinca karakter zirplayip sut bozulur")
+end)
+
+test("MatchState yayini istemcide skoru guncelliyor", function()
+	local score = clientWorld.hud:FindFirstChild("Score")
+	check(type(score.Text) == "string" and score.Text:find("GOL 0", 1, true) ~= nil,
+		"baslangic skor metni yanlis: " .. tostring(score.Text))
+	check(clientWorld.stateRemote ~= nil, "MatchState remote yok")
+	clientWorld.stateRemote:FireAllClients({
+		goals = 3,
+		saves = 2,
+		kicks = 1,
+		shots = 4,
+		sag = 0.21,
+		event = "goal",
+	})
+	check(score.Text:find("GOL 3", 1, true) ~= nil, "gol sayisi guncellenmedi: " .. tostring(score.Text))
+	check(score.Text:find("KURTARI", 1, true) ~= nil and score.Text:find("2", 1, true) ~= nil,
+		"kurtaris sayisi guncellenmedi: " .. tostring(score.Text))
+	check(score.Text:find("5", 1, true) ~= nil,
+		"sut sayisi kicks+shots=5 olmali: " .. tostring(score.Text))
+	check(score.TextColor3.G > score.TextColor3.R, "gol rengi degismedi (yesil olmali)")
+
+	clientWorld.stateRemote:FireAllClients({ goals = 3, saves = 3, kicks = 1, shots = 4, event = "save" })
+	check(score.Text:find("KURTARI", 1, true) ~= nil, "kurtaris yayini islenmedi")
+	check(score.TextColor3.R > score.TextColor3.B, "kurtaris rengi degismedi (sari olmali)")
+
+	-- Bozuk payload istemciyi cokertmemeli
+	local ok = pcall(function()
+		clientWorld.stateRemote:FireAllClients("bozuk")
+		clientWorld.stateRemote:FireAllClients({})
+	end)
+	check(ok, "bozuk MatchState payload'i istemcide hata verdi")
+	local okFrame = pcall(function()
+		clientWorld.mock.runService.RenderStepped:Fire(1 / 60)
+	end)
+	check(okFrame, "bozuk payload sonrasi kare dongusu hata verdi")
+end)
+
+test("istemci 4 s boyunca sunucuyla birlikte hatasiz calisiyor", function()
+	local res = stepWorld(clientWorld, 4.0)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.frames == 240, "kare sayisi yanlis: " .. tostring(res.frames))
+	check(clientWorld.stepped < 12,
+		"grup 11 toplam adim surei 12 s'yi asmamali (bosta demo sutu tetiklenir): " ..
+		string.format("%.1f s", clientWorld.stepped))
+end)
+
+print("\n== 12. Uctan uca: istemci -> sunucu -> top -> istemci ==")
+
+-- Not: sunucudaki şut hızı sınırı `os.clock()` ile GERÇEK zamana bakar; test
+-- kareleri ise gerçek zamanda milisaniyeler sürer. Bu yüzden "tekrar denenecek"
+-- her senaryo AYRI bir oyuncu ile koşulur (lastKickAt oyuncu başınadır) ve bu
+-- oyuncular `join = false` ile sunucunun oyuncu listesine eklenmez: böylece
+-- ölçümler (top hızı, launch sayısı) başka gövdelerden etkilenmez.
+local function makeAttacker(world, name, behindMeters)
+	local player = world.mock.makePlayer(name, Vector3.new(0, 3, 0), { join = false })
+	local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+	local bp = world.ball.Position
+	local back = (behindMeters or 0.8) * STUDS_PER_METER
+	hrp.CFrame = CFrame.lookAt(
+		Vector3.new(bp.X - back, bp.Y, bp.Z),
+		Vector3.new(bp.X - back + 10, bp.Y, bp.Z)
+	)
+	hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	return player, hrp
+end
+
+local e2e = nil
+
+test("istemcinin sutu sunucuda topu gercekten firlatiyor", function()
+	e2e = bootWorld({ striker = false })
+	check(e2e.installOk and e2e.serverOk and e2e.clientOk,
+		"dunya kurulamadi: " .. tostring(e2e.installErr or e2e.serverErr or e2e.clientErr))
+	placePlayerAtBall(e2e, 0.8)
+	local warm = stepWorld(e2e, 0.3)
+	check(#warm.errors == 0, "isinma kareleri hata verdi: " .. table.concat(warm.errors, " | "))
+
+	local startPos = e2e.ball.Position
+	e2e.mock.pressKey("Space")
+	local charge = stepWorld(e2e, 1.0) -- CHARGE_TIME = 0.9 s -> tam guc
+	check(#charge.errors == 0, "guc toplarken hata: " .. table.concat(charge.errors, " | "))
+	e2e.mock.releaseKey("Space")
+
+	-- Temas ani 0.24 s sonra: top o anda ayrilir
+	local res = stepWorld(e2e, 1.2)
+	check(#res.errors == 0, "sut sirasinda hata: " .. table.concat(res.errors, " | "))
+	check(res.launches >= 1, "top firlatilmadi (launch sayisi " .. tostring(res.launches) .. ")")
+	check(res.maxSpeed > 25,
+		"tam guc sut ~31 m/s olmali, olculen " .. string.format("%.1f m/s", res.maxSpeed))
+	check(res.maxSpeed <= 32.5,
+		"hiz tavani asildi (maxKickSpeed=31): " .. string.format("%.1f m/s", res.maxSpeed))
+	local moved = e2e.ball.Position - startPos
+	local travelled = math.sqrt(moved.X * moved.X + moved.Y * moved.Y + moved.Z * moved.Z) / STUDS_PER_METER
+	check(travelled > 10, "top yeterince ilerlemedi: " .. string.format("%.1f m", travelled))
+end)
+
+test("hiz siniri: ayni anda iki sut istegi tek sut uretir", function()
+	local settled = settleBall(e2e)
+	check(#settled.errors == 0, "top sifirlanirken hata: " .. table.concat(settled.errors, " | "))
+	local attacker = makeAttacker(e2e, "Spammer", 0.8)
+	e2e.kickRemote.OnServerEvent:Fire(attacker, 1.0, 0.5, 1.0, "instep", "R")
+	e2e.kickRemote.OnServerEvent:Fire(attacker, 1.0, -0.5, 1.5, "drive", "L") -- spam
+	local res = stepWorld(e2e, 1.0)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.launches == 1,
+		"iki istek tek sut uretmeliydi (0.35 s siniri + pending kilidi), olculen launch " ..
+		tostring(res.launches))
+	check(res.maxSpeed > 25, "sut yine de gerceklesmedi: " .. string.format("%.1f m/s", res.maxSpeed))
+end)
+
+test("uzaktaki oyuncunun sut istegi reddediliyor (sunucu otoritesi)", function()
+	local settled = settleBall(e2e)
+	check(#settled.errors == 0, "top sifirlanirken hata: " .. table.concat(settled.errors, " | "))
+	local attacker = makeAttacker(e2e, "FarAway", 20) -- kickReach = 1.70 m
+	local before = e2e.ball.Position
+	e2e.kickRemote.OnServerEvent:Fire(attacker, 1.0, 0.0, 1.0, "instep", "R")
+	local res = stepWorld(e2e, 1.0)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.launches == 0,
+		"20 m uzaktaki oyuncu sut atabildi! launch=" .. tostring(res.launches) ..
+		" maxSpeed=" .. string.format("%.1f m/s", res.maxSpeed))
+	check(res.maxSpeed < 2,
+		"duran top hareket etti: " .. string.format("%.2f m/s", res.maxSpeed))
+	local moved = e2e.ball.Position - before
+	local travelled = math.sqrt(moved.X * moved.X + moved.Y * moved.Y + moved.Z * moved.Z) / STUDS_PER_METER
+	check(travelled < 1.0, "top beklemedik sekilde yer degistirdi: " .. string.format("%.2f m", travelled))
+end)
+
+test("top havadayken sut istegi reddediliyor (yukseklik kapisi)", function()
+	-- Topu bilinen bir yere al (R ile ayni yol: ResetBall remote)
+	local settle = settleBall(e2e)
+	check(#settle.errors == 0, "reset sonrasi hata: " .. table.concat(settle.errors, " | "))
+	local groundHeight = e2e.ball.Position.Y / STUDS_PER_METER
+	check(groundHeight < 0.5, "reset sonrasi top yerde degil: " .. string.format("%.2f m", groundHeight))
+
+	-- Once topu havaya gonder
+	local kicker = makeAttacker(e2e, "Launcher", 0.8)
+	e2e.kickRemote.OnServerEvent:Fire(kicker, 1.0, 0.0, 2.2, "instep", "R")
+	local height, frames = 0, 0
+	while frames < 40 do
+		stepWorld(e2e, 1 / 60)
+		frames = frames + 1
+		height = e2e.ball.Position.Y / STUDS_PER_METER
+		if height > 1.3 then
+			break
+		end
+	end
+	check(height > 1.3, "top test icin yeterince yukselmedi: " .. string.format("%.2f m", height))
+
+	-- Simdi topun altindaki oyuncu sut istesin: kickHeight = 1.0 m -> reddedilmeli
+	local attacker = makeAttacker(e2e, "UnderBall", 0.8)
+	e2e.kickRemote.OnServerEvent:Fire(attacker, 1.0, 0.0, 1.0, "instep", "R")
+	local res = stepWorld(e2e, 0.6)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.launches == 0,
+		"havada (y=" .. string.format("%.2f m", height) .. ") topa sut islenmemeliydi, launch=" ..
+		tostring(res.launches))
+end)
+
+test("guvenilmez istemci girdisi sunucuyu cokertmiyor (beyaz liste)", function()
+	-- Her deneme AYRI oyuncu (rate limit golgelemesin) ve top her denemede
+	-- baslangicta, YERDE: boylece handler gercekten dogrulama koduna ulasir
+	-- (canKick/dist kapilari erken return yapmaz).
+	local badInputs = {
+		{ 99, -500, 99, "labels", {} }, -- shotType = Config.SHOT tablosunun anahtari
+		{ "0.8", "1.2", "0.9", "types", 5 }, -- foot sayi -> "hip5" concatenation
+		{ nil, nil, nil, nil, nil }, -- hic arguman yok
+		{ {}, { hack = true }, function() end, "place", "X" }, -- tablo/fonksiyon
+		{ math.huge, -math.huge, math.huge, "drive", "R" }, -- sonsuz
+		{ 0 / 0, 0 / 0, 0 / 0, "outside", "L" }, -- NaN
+	}
+	check(e2e.kickRemote ~= nil, "Kick remote yok")
+	for index, args in ipairs(badInputs) do
+		local settled = settleBall(e2e)
+		check(#settled.errors == 0, "deneme #" .. tostring(index) .. " oncesi hata: " ..
+			table.concat(settled.errors, " | "))
+		local attacker = makeAttacker(e2e, "Attacker" .. tostring(index), 0.8)
+		local ok, err = pcall(function()
+			e2e.kickRemote.OnServerEvent:Fire(attacker, table.unpack(args))
+		end)
+		check(ok, "sunucu handler #" .. tostring(index) .. " hata verdi: " .. tostring(err))
+		local res = stepWorld(e2e, 0.8)
+		check(#res.errors == 0,
+			"kotu girdi #" .. tostring(index) .. " sonrasi dongu hata verdi: " ..
+			table.concat(res.errors, " | "))
+		check(res.maxSpeed <= 32.5,
+			"girdi #" .. tostring(index) .. " hiz tavanini asti: " ..
+			string.format("%.1f m/s", res.maxSpeed))
+		local px, py, pz = e2e.ball.Position.X, e2e.ball.Position.Y, e2e.ball.Position.Z
+		check(px == px and py == py and pz == pz,
+			"girdi #" .. tostring(index) .. " top konumunu NaN yapti")
+		check(math.abs(px) < 1e4 and math.abs(py) < 1e4 and math.abs(pz) < 1e4,
+			"girdi #" .. tostring(index) .. " topu patlatti: " .. tostring(px))
+	end
+end)
+
+test("NaN/sonsuz girdi varsayilana duser, sut sessizce yutulmaz", function()
+	-- Beklenen davranis: sonlu olmayan sayi -> varsayilan (charge 0.5 -> 22 m/s).
+	-- Eger sunucu yalnizca "velocity sonlu mu" diye bakarsa sut hic atilmaz ve
+	-- oyuncu bosuna tuşa basmis olur; bu yuzden launch sayisi da olculuyor.
+	local settled = settleBall(e2e)
+	check(#settled.errors == 0, "sifirlama hatasi: " .. table.concat(settled.errors, " | "))
+	local attacker = makeAttacker(e2e, "NaNPlayer", 0.8)
+	local ok, err = pcall(function()
+		e2e.kickRemote.OnServerEvent:Fire(attacker, 0 / 0, 0 / 0, 0 / 0, "instep", "R")
+	end)
+	check(ok, "NaN girdisi handler'i patlatti: " .. tostring(err))
+	local res = stepWorld(e2e, 1.0)
+	check(#res.errors == 0, "NaN sonrasi dongu hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.launches == 1,
+		"NaN girdisi varsayilan gucle sut uretmeliydi, launch=" .. tostring(res.launches))
+	check(res.maxSpeed > 18 and res.maxSpeed < 25,
+		"varsayilan charge=0.5 -> ~22 m/s beklenirdi, olculen " ..
+		string.format("%.1f m/s", res.maxSpeed))
+	local px = e2e.ball.Position.X
+	check(px == px and math.abs(px) < 1e4, "top konumu bozuldu: " .. tostring(px))
+end)
+
+test("gecersiz vurus turi ve ayak beyaz listeye duser (sut yine atilir)", function()
+	-- shotType="labels" Config.SHOT icinde GERCEK bir anahtar; beyaz liste olmazsa
+	-- sp.power = nil -> aritmetik hatasi. foot={} ise "hip" .. {} -> concatenate hatasi.
+	local settled = settleBall(e2e)
+	check(#settled.errors == 0, "sifirlama hatasi: " .. table.concat(settled.errors, " | "))
+	local attacker = makeAttacker(e2e, "CheatType", 0.8)
+	local ok, err = pcall(function()
+		e2e.kickRemote.OnServerEvent:Fire(attacker, 1.0, 0.0, 1.0, "labels", {})
+	end)
+	check(ok, "gecersiz shotType/foot handler'i patlatti: " .. tostring(err))
+	local res = stepWorld(e2e, 1.0)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.launches == 1, "gecersiz tur yine de varsayilanla sut uretmeliydi, launch=" ..
+		tostring(res.launches))
+	check(res.maxSpeed > 25 and res.maxSpeed <= 32.5,
+		"tam guc sut ~31 m/s olmali, olculen " .. string.format("%.1f m/s", res.maxSpeed))
+end)
+
+test("remote sozlesmesi: sunucudaki her remote istemcide var, tersi de", function()
+	local serverSrc = SOURCES["server/SimLoop"]
+	local clientSrc = SOURCES["client/BallView"]
+	check(type(serverSrc) == "string", "SimLoop kaynagi yok")
+	check(type(clientSrc) == "string", "BallView kaynagi yok")
+
+	local created = {}
+	local createdCount = 0
+	for name in serverSrc:gmatch('ensureRemote%("([^"]+)"%)') do
+		if not created[name] then
+			createdCount = createdCount + 1
+		end
+		created[name] = true
+	end
+	check(createdCount >= 3, "sunucuda en az 3 remote beklenirdi, bulunan " .. tostring(createdCount))
+
+	local usedCount = 0
+	for name in clientSrc:gmatch('remotes:WaitForChild%("([^"]+)"') do
+		usedCount = usedCount + 1
+		check(created[name] == true,
+			"istemci '" .. name .. "' remote'unu bekliyor ama sunucu olusturmuyor")
+	end
+	check(usedCount >= 3, "istemcide remote kullanimi bulunamadi")
+
+	for name in pairs(created) do
+		check(clientSrc:find('"' .. name .. '"', 1, true) ~= nil,
+			"sunucu '" .. name .. "' remote'unu olusturuyor ama istemci hic kullanmiyor")
+	end
+end)
+
+test("sunucu gol/kurtaris olaylarini MatchState ile yayinliyor", function()
+	check(liveMock ~= nil, "canli mac (grup 10) calismadi")
+	local broadcasts = 0
+	local lastPayload = nil
+	for _, entry in ipairs(liveMock.remoteLog) do
+		if entry.name == "MatchState" and entry.direction == "FireAllClients" then
+			broadcasts = broadcasts + 1
+			lastPayload = entry.args[1]
+		end
+	end
+	check(broadcasts >= 2, "yeterli MatchState yayini yok: " .. tostring(broadcasts))
+	check(type(lastPayload) == "table", "MatchState payload tablo degil")
+	for _, key in ipairs({ "goals", "saves", "kicks", "shots", "sag", "event" }) do
+		check(lastPayload[key] ~= nil, "payload alani eksik: " .. key)
+	end
+	check(type(lastPayload.goals) == "number" and lastPayload.goals >= 1,
+		"24 s'lik macta gol yayinlanmadi: " .. tostring(lastPayload.goals))
+end)
+
+test("istemci ve sunucu ayni Config degerlerini kullaniyor (tek kaynak)", function()
+	local sharedConfig = require(clientWorld.mock.replicatedStorage.Shared.Config)
+	check(sharedConfig.STUDS_PER_METER == Config.STUDS_PER_METER, "STUDS_PER_METER farkli")
+	check(sharedConfig.BALL_CONTROL.chargeTime == Config.BALL_CONTROL.chargeTime, "chargeTime farkli")
+	check(sharedConfig.PITCH.halfLength == Config.PITCH.halfLength, "halfLength farkli")
+	check(sharedConfig.BALL_CONTROL.maxKickSpeed == Config.BALL_CONTROL.maxKickSpeed, "maxKickSpeed farkli")
+	local types = sharedConfig.SHOT.types
+	check(#types == #Config.SHOT.types, "vurus turi sayisi farkli")
+	for i, name in ipairs(types) do
+		check(name == Config.SHOT.types[i], "vurus turi sirasi farkli: " .. tostring(name))
+	end
+end)
+
 print("")
 print("==============================================")
+print("\n== 13. Girdi dogrulama: Validate (birim) ==")
+
+local Validate = __load("shared/Core/Validate")
+
+test("Validate.number: NaN/inf/nil/tablo/sayisal-olmayan -> yedek deger", function()
+	local nan = 0 / 0
+	check(Validate.number(nan, 0.5) == 0.5, "NaN yedege dusmedi")
+	check(Validate.number(math.huge, 0.5) == 0.5, "+inf yedege dusmedi")
+	check(Validate.number(-math.huge, 0.5) == 0.5, "-inf yedege dusmedi")
+	check(Validate.number(nil, 0.5) == 0.5, "nil yedege dusmedi")
+	check(Validate.number({}, 0.5) == 0.5, "tablo yedege dusmedi")
+	check(Validate.number("abc", 0.5) == 0.5, "sayisal olmayan string yedege dusmedi")
+	check(Validate.number(0.25, 0.5) == 0.25, "gecerli sayi degisti")
+	check(Validate.number("0.75", 0.5) == 0.75, "sayisal string kabul edilmedi")
+	check(Validate.number(0, 0.5) == 0, "sifir yedege dustu (0 gecersiz sayildi)")
+end)
+
+test("Validate.clamp: once sonluluk, sonra kisitlama", function()
+	local nan = 0 / 0
+	-- Kritik ayrinti: saf math.max/min zinciri NaN'i SINIRA cevirir (math.min(1, NaN)
+	-- karsilastirmasi false -> 1). Yani istemci NaN gondererek "tam guc" alabilir.
+	-- Validate.clamp once sonlulugu denetledigi icin NaN yedek degere duser.
+	check(Validate.clamp(nan, 0, 1, 0.5) == 0.5, "NaN sinira degil yedek degere dusmeli")
+	check(Validate.clamp(5, 0, 1, 0.5) == 1, "ust sinira kisitlanmadi")
+	check(Validate.clamp(-5, 0, 1, 0.5) == 0, "alt sinira kisitlanmadi")
+	check(Validate.clamp(0.3, 0, 1, 0.5) == 0.3, "araliktaki deger bozuldu")
+	check(Validate.clamp(nil, -3.3, 3.3, 0) == 0, "nil -> yedek")
+	check(Validate.clamp(math.huge, 0.2, 2.3, 1.0) == 1.0, "inf -> yedek degere dusmedi")
+end)
+
+test("Validate.vec3: yalniz sonlu ve TAM {x,y,z} gecer", function()
+	local nan = 0 / 0
+	check(Validate.vec3({ x = 1, y = 2, z = 3 }) == true, "gecerli vektor reddedildi")
+	check(Validate.vec3({ x = -30, y = 8.2, z = 0.5 }) == true, "gercek sut hizi reddedildi")
+	check(Validate.vec3({ x = nan, y = 0, z = 0 }) == false, "NaN bilesen kabul edildi")
+	check(Validate.vec3({ x = 0, y = math.huge, z = 0 }) == false, "inf bilesen kabul edildi")
+	check(Validate.vec3({ x = 0, y = 0 }) == false, "z eksik ama kabul edildi (ipairs tuzağı)")
+	check(Validate.vec3({ x = 0 }) == false, "y ve z eksik ama kabul edildi")
+	check(Validate.vec3({}) == false, "bos tablo kabul edildi")
+	check(Validate.vec3({ x = 0, y = 0, z = "1" }) == false, "string bilesen kabul edildi")
+	check(Validate.vec3(nil) == false, "nil kabul edildi")
+	check(Validate.vec3("hiz") == false, "string kabul edildi")
+	check(Validate.vec3(30) == false, "sayi kabul edildi")
+	check(Validate.vec3({ x = 2e6, y = 0, z = 0 }) == false, "buyukluk sinirini asan deger kabul edildi")
+end)
+
+test("Validate.shotType: beyaz liste disindaki her sey varsayilana duser", function()
+	local allowed = Validate.shotTypeSet({ types = { "place", "instep", "drive", "outside" } })
+	check(Validate.shotType("drive", allowed) == "drive", "gecerli tur degisti")
+	check(Validate.shotType("place", allowed) == "place", "gecerli tur degisti")
+	-- Config.SHOT.labels ve Config.SHOT.types GERCEK tablolar: beyaz liste olmasa
+	-- KickAnim icinde sp.power = nil -> aritmetik hatasi.
+	check(Validate.shotType("labels", allowed) == Validate.DEFAULT_SHOT_TYPE, "Config.SHOT.labels tur sayildi")
+	check(Validate.shotType("types", allowed) == Validate.DEFAULT_SHOT_TYPE, "Config.SHOT.types tur sayildi")
+	check(Validate.shotType(nil, allowed) == Validate.DEFAULT_SHOT_TYPE, "nil tur kabul edildi")
+	check(Validate.shotType({}, allowed) == Validate.DEFAULT_SHOT_TYPE, "tablo tur kabul edildi")
+	check(Validate.shotType(7, allowed) == Validate.DEFAULT_SHOT_TYPE, "sayi tur kabul edildi")
+	check(Validate.shotType(true, allowed) == Validate.DEFAULT_SHOT_TYPE, "boolean tur kabul edildi")
+	local empty = Validate.shotTypeSet(nil)
+	check(empty[Validate.DEFAULT_SHOT_TYPE] == true, "Config yokken gecerli tur kalmadi")
+	check(Validate.shotType("place", empty) == Validate.DEFAULT_SHOT_TYPE, "bos listede tur kabul edildi")
+	check(Validate.shotType(nil, nil) == Validate.DEFAULT_SHOT_TYPE, "allowed verilmeden cagri")
+end)
+
+test("Validate.foot: yalniz L/R, diger her sey nil (animasyon otomatik secer)", function()
+	check(Validate.foot("L") == "L", "sol ayak degisti")
+	check(Validate.foot("R") == "R", "sag ayak degisti")
+	check(Validate.foot("l") == nil, "kucuk harf kabul edildi (concatenate riski)")
+	check(Validate.foot({}) == nil, "tablo kabul edildi")
+	check(Validate.foot(nil) == nil, "nil -> nil olmadi")
+	check(Validate.foot(1) == nil, "sayi kabul edildi")
+	check(Validate.foot("Left") == nil, "'Left' kabul edildi")
+end)
+
+test("Validate beyaz listesi gercek Config.SHOT ile uyumlu (KickAnim patlamaz)", function()
+	local allowed = Validate.shotTypeSet(Config.SHOT)
+	check(type(Config.SHOT.types) == "table", "Config.SHOT.types tablo degil")
+	for _, typeName in ipairs(Config.SHOT.types) do
+		check(Validate.shotType(typeName, allowed) == typeName, "Config turu reddedildi: " .. tostring(typeName))
+		local sp = Config.SHOT[typeName]
+		check(type(sp) == "table", "Config.SHOT[" .. tostring(typeName) .. "] yok -> KickAnim nil indexler")
+		check(type(sp and sp.power) == "number", "Config.SHOT." .. tostring(typeName) .. ".power sayi degil -> aritmetik hatasi")
+	end
+	check(Validate.shotType(Validate.DEFAULT_SHOT_TYPE, allowed) == Validate.DEFAULT_SHOT_TYPE, "varsayilan tur Config'te yok")
+	check(type(Config.SHOT[Validate.DEFAULT_SHOT_TYPE]) == "table", "varsayilan tur icin Config girdisi yok")
+end)
+
+print("\n== 14. Nisan girdisi: fare -> dünya isini -> AimMarker ==")
+
+-- Kamera Scriptable ve sabit bir ofsette durur; bu yüzden kameranin LookVector'u
+-- oyuncunun baktigi yer DEGILDIR. Nisan FARE ile alinir: computeAim once
+-- UserInputService:GetMouseLocation() + camera:ViewportPointToRay ile isin kurar,
+-- isin kale duzlemini onden kesmiyorsa kamera bakisina duser.
+-- Bu grup o baglantiyi kilitler: mouseRay kaldirilirsa fare hareketi nisan
+-- noktasini degistirmeyi birakir ve asagidaki testler duser.
+local aimWorld = nil
+
+test("fare ekrani nisana bagli: AimMarker fareyle birlikte kayiyor", function()
+	aimWorld = bootWorld({ striker = false })
+	check(aimWorld.installOk and aimWorld.serverOk and aimWorld.clientOk,
+		"dunya kurulamadi: " .. tostring(aimWorld.installErr or aimWorld.serverErr or aimWorld.clientErr))
+	placePlayerAtBall(aimWorld, 0.8)
+
+	local marker = aimWorld.mock.workspace:FindFirstChild("AimMarker")
+	check(marker ~= nil, "workspace.AimMarker yok (nisan gostergesi hic kurulmamis)")
+	local vp = aimWorld.mock.viewportSize
+	check(vp and vp.X > 0 and vp.Y > 0, "mock viewport boyutu gecersiz")
+
+	-- Fareyi ekran noktasina tasi, bir kac kare adimla, nisan noktasini oku
+	local function aimAt(x, y)
+		aimWorld.mock.setMouseLocation(x, y)
+		local stepped = stepWorld(aimWorld, 0.05)
+		check(#stepped.errors == 0, "nisan kareleri hata verdi: " .. table.concat(stepped.errors, " | "))
+		check(marker.Transparency < 1, "nisan yok sayildi (AimMarker gizli) -> computeAim nil dondu")
+		return marker.CFrame.Position
+	end
+
+	local center = aimAt(vp.X * 0.5, vp.Y * 0.5)
+	local right = aimAt(vp.X * 0.85, vp.Y * 0.5)
+	local left = aimAt(vp.X * 0.15, vp.Y * 0.5)
+	local up = aimAt(vp.X * 0.5, vp.Y * 0.2)
+	local down = aimAt(vp.X * 0.5, vp.Y * 0.8)
+
+	-- YATAY: sag/sol nisan noktasini ters yonlerde kaydirmali
+	check(math.abs(right.Z - left.Z) > 0.5,
+		string.format("fare sag/sol nisani degistirmiyor: rightZ=%.2f leftZ=%.2f (stud)", right.Z, left.Z))
+	check((right.Z - center.Z) * (left.Z - center.Z) < 0,
+		"sag ve sol ayni yone kaydi (nisan ters baglanmis)")
+	-- DIKEY: yukarı/asagi nisan yuksekligini degistirmeli
+	check(math.abs(up.Y - down.Y) > 0.2,
+		string.format("fare yukarı/asagi nisan yuksekligini degistirmiyor: upY=%.2f downY=%.2f", up.Y, down.Y))
+
+	-- Her ornek saha sinirlari icinde kalmali (z: +/-3.3 m, y: 0.25..2.3 m)
+	local zLimit = 3.3 * STUDS_PER_METER + 0.01
+	for _, p in ipairs({ center, right, left, up, down }) do
+		check(math.abs(p.Z) <= zLimit, "nisan z sinirini asti: " .. string.format("%.2f stud", p.Z))
+		check(p.Y >= 0.25 * STUDS_PER_METER - 0.01 and p.Y <= 2.3 * STUDS_PER_METER + 0.01,
+			"nisan y sinirini asti: " .. string.format("%.2f stud", p.Y))
+	end
+end)
+
+test("asiri fare konumu sutu yutmuyor (kamera bakisina duser, sut yine atilir)", function()
+	check(aimWorld ~= nil, "onceki nisan testi dunya kurmadi")
+	-- Ekrani kosesi: isin kale duzlemini onden kesmeyebilir. computeAim nil
+	-- donerse fireKick hic FireServer cagirmaz ve sut SESSIZCE yutulur.
+	aimWorld.mock.setMouseLocation(1, 1)
+	local attacker = makeAttacker(aimWorld, "Aimer", 0.8)
+	aimWorld.mock.pressKey("Space")
+	local charge = stepWorld(aimWorld, 1.0)
+	check(#charge.errors == 0, "guc toplarken hata: " .. table.concat(charge.errors, " | "))
+	aimWorld.mock.releaseKey("Space")
+	local res = stepWorld(aimWorld, 1.2)
+	check(#res.errors == 0, "sut sirasinda hata: " .. table.concat(res.errors, " | "))
+	check(res.launches >= 1,
+		"kose nisaninda sut atilmadi (launch " .. tostring(res.launches) .. ") -> nisan sessizce yutuluyor")
+	check(res.maxSpeed > 20, "sut hizi dusuk: " .. string.format("%.1f m/s", res.maxSpeed))
+	check(attacker ~= nil, "saldirgan kurulamadi")
+end)
+
 print("  GECEN: " .. tostring(passed) .. "   BASARISIZ: " .. tostring(failed))
 if failed > 0 then
 	print("  Basarisiz: " .. table.concat(failures, ", "))

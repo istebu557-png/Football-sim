@@ -68,6 +68,20 @@ function luaEscape(text) {
   );
 }
 
+/**
+ * Bir modülün kurulum dosyasındaki birebir satır bloğu.
+ * Üretim (generateInstaller) ve senkron denetimi (tools/runner.js, tools/verify.js)
+ * aynı fonksiyonu kullanır; böylece "kurulum güncel mi?" sorusu tek yerden cevaplanır.
+ */
+function moduleEntry(mod) {
+  const bracket = longBracket(mod.source);
+  const head = `\t["${mod.key}"] = { class = "${mod.className}", source = ${bracket ? bracket.open : ""}`;
+  if (bracket) {
+    return head + "\n" + mod.source.replace(/\s+$/, "") + "\n" + bracket.close + " },";
+  }
+  return head + luaEscape(mod.source) + " },";
+}
+
 function generateInstaller() {
   const modules = collectModules();
   const bootstrap = fs.readFileSync(path.join(ROOT, "tools", "installer", "bootstrap.lua"), "utf8");
@@ -89,14 +103,7 @@ function generateInstaller() {
   lines.push("local SOURCES = {");
 
   for (const mod of modules) {
-    const bracket = longBracket(mod.source);
-    lines.push(`\t["${mod.key}"] = { class = "${mod.className}", source = ${bracket ? bracket.open : ""}`);
-    if (bracket) {
-      lines.push(mod.source.replace(/\s+$/, ""));
-      lines.push(bracket.close + " },");
-    } else {
-      lines.push(luaEscape(mod.source) + " },");
-    }
+    lines.push(moduleEntry(mod));
   }
 
   lines.push("}");
@@ -121,7 +128,7 @@ function readInstaller() {
   }
 }
 
-module.exports = { generateInstaller, writeInstaller, readInstaller, collectModules, OUT };
+module.exports = { generateInstaller, writeInstaller, readInstaller, collectModules, moduleEntry, longBracket, luaEscape, OUT };
 
 if (require.main === module) {
   const info = writeInstaller();

@@ -6,6 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "test": "node tools/runner.js",
+    "verify": "node tools/verify.js",
+    "verify:mutate": "node tools/verify_mutations.js",
     "trace": "node tools/runner.js --trace",
     "preview": "node tools/serve.js",
     "install:build": "node tools/installer_lib.js",
