@@ -38,8 +38,25 @@ herhangi bir yayınlanmış Asset / Animation instance yok.
    üretir. Sınır yine gerçek bir sınırdır — 20 m uzaktaki oyuncunun şut isteği
    reddedilmeye devam ediyor ve bu test ediliyor.
 2. Reddedilme **sessizdi**. Artık top menzil dışındayken HUD yazısı turuncuya
-   dönüp mesafeyi söylüyor: `TOPA YAKLAŞ → 9.4 m uzakta · şut menzili 2.0 m ·
-   WASD ile koş`. Sunucu otoritesi değişmedi; yalnızca nedeni görünür oldu.
+   dönüp mesafeyi söylüyor: `TOPA YAKLAŞ → 9.4 m önde · menzil 3.2 m · koşunca
+   şut çıkar · WASD ile koş`. Sunucu otoritesi değişmedi; yalnızca nedeni
+   görünür oldu.
+3. **Top sürerken şut çıkmıyordu**: dokunuş topu oyuncunun önüne iter, boşluk
+   5.5 m/s'de ~2.2 m'ye açılır ve katı menzili (2.00 m) geçer. İki çözüm:
+   - **Sürüş sahipliği** (`possessionReach = 3.20 m`, `possessionTime = 0.60 s`):
+     az önce dokunduğun topa, bir adım önde olsa da vurabilirsin — gerçek
+     futbolcu böyle vurur. Dokunulmamış top için kural değişmedi.
+   - **Şut tamponu** (`shotBufferReach = 6.00 m`, `shotBufferTime = 0.75 s`):
+     `SPACE`'i bıraktığında top menzil dışındaysa istek **çöpe gitmez**; oyuncu
+     yetişince şut kendiliğinden çıkar. Pencere kapanırsa nedeni söylenir.
+4. Ret / tampon / çıkış **oyuncuya bildiriliyor**: sunucu `MatchState` içinde
+   `hint` alanı gönderiyor (`şut bekliyor → topa yetiş…`, `şut çıktı`,
+   `şut kaçtı: …`, `şut çıkmadı: top 9.0 m önde — şut menzili 3.2 m`); istemci
+   bunu HUD satırında 2.4 s gösteriyor. Top katı menzil içindeyse HUD yeşil
+   **`ŞUT HAZIR`** diyor.
+
+Sprint cezası **korundu**: 7.6 m/s'de dokunuş kaçar, top 6.6 m'ye kadar açılır —
+o topa anında vurulamaz, kovalamak gerekir (tampon menzili de 6.00 m).
 
 Kurulum: 26 ModuleScript (`ReplicatedStorage/Shared/**`), `SimLoop` (Script,
 `ServerScriptService/Server`), `BallView` (LocalScript, `StarterPlayerScripts/Client`),
@@ -48,7 +65,7 @@ yarım saha + kale + ağ + kaleci + top + stadyum çevresi (`Workspace/FootballP
 
 ```bash
 npm run install:build   # kurulum dosyasını src/'den yeniden üret
-npm test                # 132 kontrol + kurulum senkron denetimi
+npm test                # 137 kontrol + kurulum senkron denetimi
 ```
 
 ---
@@ -72,7 +89,7 @@ kırmızıysa çıkış kodu `1` döner. Her kapı kendi alanında kanıt üreti
 | 6 | Kurulum | `install/FootballSim_Install.lua` kaynaklarla **bit-bit senkron**: 26 ModuleScript + 1 Script + 1 LocalScript, sınıf ve kaynak birebir |
 | 7 | Rojo | `default.project.json` `src/`'nin **tamamını** eşliyor; eşlenmemiş tek dosya yok |
 | 8 | Remote + otorite | `Kick` / `ResetBall` / `MatchState` iki tarafta da var; `FireServer` argüman sayısı = `OnServerEvent` parametre sayısı; `MatchState` alanları istemcinin okuduklarını kapsıyor; `InputEnded → fireKick` zinciri kopuk değil; **her `Ballistics.solveLaunch` çıktısı `isFiniteVec3` denetiminden geçiyor** (silinirse kapı düşer) |
-| 9 | Testler | `tools/spec.luau` → **132 kontrol**, 15 grup, 0 başarısız (test sayısı geri giderse ya da bir grup hiç koşmazsa kapı düşer) |
+| 9 | Testler | `tools/spec.luau` → **137 kontrol**, 15 grup, 0 başarısız (test sayısı geri giderse ya da bir grup hiç koşmazsa kapı düşer) |
 | 10 | Fizik izi | `preview/trace.json` üretiliyor; 6 senaryo, 635 yol noktası sonlu; falso > 2 m, direk gol değil, ağ esner ve topu yutar; `index.html`'in okuduğu her alan JSON'da var |
 | 11 | Anim izi | `preview/anim.json` üretiliyor; 16 sahne / 481 kare, her kare eklem sayısıyla uyumlu ve sonlu; `dive/jump/block/jumpDive` kaleci hareketleri mevcut |
 | 12 | Önizleme | `tools/serve.js` gerçekten ayakta: `/`, `/anim.html`, `/trace.json`, `/anim.json` → 200 + doğru `content-type`, olmayan dosya 404, dizin dışı erişim engelli |
@@ -240,7 +257,7 @@ fırlatmaz. Model:
 
 ## Ölçülen davranışlar
 
-`npm test` → **132 kontrol**. Öne çıkanlar:
+`npm test` → **137 kontrol**. Öne çıkanlar:
 
 | Ölçüm | Motor | Gerçek dünya |
 |---|---|---|
@@ -252,6 +269,8 @@ fırlatmaz. Model:
 | **Top sürme @ 4 m/s** | **3.0 dokunuş/sn, boşluk 0.80–1.33 m** | 0.5–1.5 m |
 | **Top sürme @ 5.5 m/s** | 1.3 dokunuş/sn, boşluk ~2.2 m | 1–2 m |
 | **Top sürme @ 7.6 m/s (sprint)** | dokunuş kaçar, top 6.6 m'ye kadar açılır | 3–6 m, kovalanır |
+| **Sürüş hâlinde şut** | 2.0–3.2 m boşlukta şut çıkar (sürüş sahipliği) | bir adım öndeki topa vurulur |
+| **Şut tamponu** | menzil dışı istek 0.75 s bekler, yetişince çıkar | input buffering |
 | **File: 24 m/s giriş** | **0.25 m/s'de durur, ağ 0.38 m esner** | ağ topu yutar |
 | Kaleci | 20 m/s şutu gövdeyle keser | kurtarış |
 | 30 m sprint | ~5.2 s | 4.0–5.5 s (amatör) |
@@ -313,7 +332,7 @@ npm run preview # http://localhost:8080/anim.html
 
 `preview/anim.html` canvas ile yandan/önden görünüm, oynat/duraklat, zaman çubuğu, temas anı işareti, kemik çizimi ve top işareti sunar. Kaynak: `tools/anim_trace.luau` (11 şut + 5 kaleci sahnesi = 16, `contact` ve `bayrak` alanları ile).
 
-Test: `tools/spec.luau` → **132/132** (8. grup kaleci + kurulum + sahne ağacı + stadyum çevresi, 9. grup anim, 10. grup canlı döngü + şutçu, 11. grup istemci/E2E, 12. grup girdi sertleştirme, 13. grup `Validate` birim testleri, 14. grup fare → nişan).
+Test: `tools/spec.luau` → **137/137** (8. grup kaleci + kurulum + sahne ağacı + stadyum çevresi, 9. grup anim, 10. grup canlı döngü + şutçu, 11. grup istemci/E2E, 12. grup girdi sertleştirme, 13. grup `Validate` birim testleri, 14. grup fare → nişan).
 
 ### Rojo ile (alternatif)
 
@@ -336,7 +355,7 @@ rojo build -o FootballSim.rbxlx
 - [ ] **Adım 6** — 11v11: diziliş, takım AI'sı, baskı, ofansif/defansif geçiş.
 - [ ] **Adım 7** — Ağ: istemci tahmini, gecikme telafisi, bant bütçesi.
 - [ ] **Adım 8** — Sunum: animasyonlar, kamera modları, UI, ses.
-      *Animasyon alt-adımı (şut + kaleci + oyuncu yürüyüşü/duruşu): kodla, FK, testli (132/132). Kamera modu (V izleme) ve HUD (ipucu/güç barı/skor) tamam; ses bekliyor.*
+      *Animasyon alt-adımı (şut + kaleci + oyuncu yürüyüşü/duruşu): kodla, FK, testli (137/137). Kamera modu (V izleme) ve HUD (ipucu/güç barı/skor) tamam; ses bekliyor.*
 
 ---
 

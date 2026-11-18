@@ -53,6 +53,11 @@ local GOAL_PLANE = HALF_LENGTH * S
 local CHARGE_TIME = (Config and Config.BALL_CONTROL and Config.BALL_CONTROL.chargeTime) or 0.9
 local BC = (Config and Config.BALL_CONTROL) or {}
 local KICK_REACH = BC.kickReach or 2.0
+-- Sunucuyla AYNI kural: top sürerken dokunuş topu öne ittiği için şut menzili
+-- "sahiplik" bandına kadar geniştir; o bandın dışında da istek tampona alınır.
+-- İstemci dar eşiği (kickReach) kullandığında oyuncu sürüşte yanlış uyarı görür.
+local POSSESSION_REACH = BC.possessionReach or 3.2
+local BUFFER_REACH = BC.shotBufferReach or 6.0
 
 -- ---------------------------------------------------------------- prosedürel oyuncu animasyonu
 -- Asset yok: karakterin R15 eklemleri her karede KODLA pozlanır. Bu istemcide
@@ -109,24 +114,39 @@ end
 -- Sunucunun şutu SESSİZCE reddettiği durum (top menzil dışında) istemcide
 -- görünür olmalı: yoksa oyuncu "şut çekemiyorum" der. reachState her karede
 -- onFrame tarafından güncellenir; metin buradan okunur.
-local reachState = nil -- nil (menzilde) | "far:<metre>"
+local reachState = nil -- nil (menzilde) | sayı: topun metre cinsinden uzaklığı
+
+-- Sunucunun gönderdiği şut geri bildirimi (tampona alındı / reddedildi / çıktı).
+-- Sunucu otoriter taraf olduğu için asıl doğru bilgi budur; istemcideki mesafe
+-- ölçümü yalnızca anlık ipucudur.
+local serverHint = nil
+local serverHintUntil = 0
+-- Top katı menzil içindeyse HUD "ŞUT HAZIR" der: oyuncu SPACE'in boşa
+-- gitmeyeceğini görür (sahiplik bandında da şut çıkar, ama kesin olan bu).
+local inStrictReach = false
 
 local function updateHint()
 	if not hint then
 		return
 	end
+	if serverHint and animClock < serverHintUntil then
+		-- Sunucunun verdiği neden her şeyden önce gelir (otoriter bilgi).
+		hint.Text = serverHint .. "   |   " .. shotLabel()
+		hint.TextColor3 = Color3.fromRGB(255, 226, 140)
+		return
+	end
 	if reachState then
 		-- Uyarı, vuruş türü/ayak bilgisini SİLMEZ: oyuncu o anda T/F ile
 		-- hazırlık yapıyor olabilir, ikisi birlikte görünmeli.
-		local meters = reachState:sub(5)
-		hint.Text = "TOPA YAKLAŞ → " .. meters .. " m uzakta  ·  şut menzili "
-			.. string.format("%.1f", KICK_REACH) .. " m  ·  WASD ile koş   |   "
-			.. shotLabel()
+		local verdict = (reachState > BUFFER_REACH) and "şut çıkmaz" or "koşunca şut çıkar"
+		hint.Text = "TOPA YAKLAŞ → " .. string.format("%.1f", reachState)
+			.. " m önde  ·  menzil " .. string.format("%.1f", POSSESSION_REACH)
+			.. " m  ·  " .. verdict .. "  ·  WASD ile koş   |   " .. shotLabel()
 		hint.TextColor3 = Color3.fromRGB(255, 206, 110)
 		return
 	end
-	hint.Text = string.format(HINT_FORMAT, shotLabel())
-	hint.TextColor3 = Color3.fromRGB(232, 240, 246)
+	hint.Text = (inStrictReach and "ŞUT HAZIR  ·  " or "") .. string.format(HINT_FORMAT, shotLabel())
+	hint.TextColor3 = inStrictReach and Color3.fromRGB(150, 255, 190) or Color3.fromRGB(232, 240, 246)
 end
 
 local function cycleShotType()
@@ -316,6 +336,15 @@ if stateRemote then
 		elseif payload.event == "save" then
 			scoreLabel.TextColor3 = Color3.fromRGB(255, 210, 110)
 		end
+		-- Şut geri bildirimi: sunucu bir şutu reddetti/tampona aldı/çıkardı ise
+		-- NEDENİ HUD'da kısa süre gösterilir (sessiz red yok).
+		if type(payload.hint) == "string" and payload.hint ~= "" then
+			serverHint = payload.hint
+			serverHintUntil = animClock + 2.4
+			updateHint()
+		elseif payload.event == "shotFired" then
+			serverHint = nil
+		end
 	end)
 end
 
@@ -504,13 +533,15 @@ local function onFrame(dt)
 		local dx = hrp.Position.X - serverBall.Position.X
 		local dz = hrp.Position.Z - serverBall.Position.Z
 		local distM = math.sqrt(dx * dx + dz * dz) / S
-		if distM > KICK_REACH then
-			reachState = "far:" .. string.format("%.1f", distM)
+		if distM > POSSESSION_REACH then
+			reachState = distM
 		else
 			reachState = nil
 		end
+		inStrictReach = distM <= KICK_REACH
 	else
 		reachState = nil
+		inStrictReach = false
 	end
 	updateHint()
 
@@ -701,6 +732,20 @@ local lastKickAt = {}
 -- poz yazıldığı için oyuncu "animasyonlar çalışmıyor" diyordu.
 local playerAnimClock = 0
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
+-- ŞUT TAMPONU: menzil dışındaki istek çöpe gitmez, kısa bir pencere bekletilir.
+-- player -> { at = sim.time, charge, aimZ, aimY, shotType, foot }
+local buffered = {}
+
+-- broadcastState aşağıda tanımlı; Lua'da local'ler bildirim noktasından sonra
+-- görünür olduğu için burada ileri bildirim gerekiyor.
+local broadcastState
+
+--[[ Şut geri bildirimi: istemcide HUD satırında kısa süre gösterilir. ]]
+local function shotHint(kind, text)
+	if broadcastState then
+		broadcastState(kind, nil, text)
+	end
+end
 
 --[[ İstemciden gelen HER değer güvenilmezdir (exploiter arbitrary tablo/string
 	gönderebilir). KickAnim, `SHOT[shotType]` ve `"hip" .. foot` kullandığı için
@@ -731,38 +776,43 @@ local function isFiniteVec3(v)
 	return Validate.vec3(v)
 end
 
-kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
-	local now = os.clock()
-	if lastKickAt[player] and now - lastKickAt[player] < 0.35 then
-		return
-	end
+local KICK_COOLDOWN = 0.35 -- iki şut isteği arasındaki en az süre (s)
 
+--[[ Şut isteğini uygular (hem doğrudan istek hem tampondaki istek aynı yoldan
+     geçer; böylece iki yol farklı kural uygulayamaz).
+     Dönüş: true -> vuruş başladı | false, neden, tamponlanabilir mi ]]
+local function startShot(player, charge, aimZ, aimY, shotType, foot)
+	local BC = Config.BALL_CONTROL
 	local state = playerState(player)
 	if not state then
-		return
+		return false, "karakter hazır değil (HumanoidRootPart yok)", false
 	end
 
 	local control = getControl(player)
-	if not control:canKick(sim.ball, state) then
-		return
+	if not control:canKick(sim.ball, state, sim.time) then
+		if sim.ball.pos.y > BC.kickHeight then
+			return false, string.format(
+				"top %.2f m havada — vuruş yüksekliği %.1f m", sim.ball.pos.y, BC.kickHeight), false
+		end
+		local gap = control:shotGap(sim.ball, state)
+		return false, string.format(
+			"top %.1f m önde — şut menzili %.1f m", gap, BC.possessionReach), gap <= BC.shotBufferReach
 	end
 	if pending[player] then
-		return
+		return false, "şut zaten sürüyor", false
 	end
-
-	lastKickAt[player] = now
 
 	local c = Validate.clamp(charge, 0, 1, 0.5)
 	local targetZ = Validate.clamp(aimZ, -3.3, 3.3, 0)
 	local targetY = Validate.clamp(aimY, 0.2, 2.3, 1.0)
 
 	-- Nişan hatası: yanal sapma (deterministik RNG)
-	local errRad = rng:normal(0, math.rad(Config.BALL_CONTROL.aimErrorDeg))
+	local errRad = rng:normal(0, math.rad(BC.aimErrorDeg))
 	local dx = P.halfLength - sim.ball.pos.x
 	local dz = targetZ - sim.ball.pos.z
 	local dist = math.sqrt(dx * dx + dz * dz)
 	if dist < 0.5 then
-		return
+		return false, "kale ağzındasın: nişan düzlemi kurulamıyor", false
 	end
 	local lateral = math.tan(errRad) * dist
 
@@ -792,6 +842,39 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 		spin = Vec3.add(spin, Vec3.new(0, rng:symmetric(10), 0)),
 		fired = false,
 	}
+	return true
+end
+
+kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
+	local now = os.clock()
+	if lastKickAt[player] and now - lastKickAt[player] < KICK_COOLDOWN then
+		shotHint("shotRejected", string.format("şut çıkmadı: çok hızlı, iki şut arası en az %.2f s", KICK_COOLDOWN))
+		return
+	end
+
+	local ok, reason, bufferable = startShot(player, charge, aimZ, aimY, shotType, foot)
+	if ok then
+		lastKickAt[player] = now
+		return
+	end
+
+	-- SESSİZ RED YOK. Top sürüşten öndeyse istek TAMPONA alınır: oyuncu topa
+	-- yetişince şut kendiliğinden çıkar (bkz. adım 3a). Tampon menzili de
+	-- aşıldıysa oyuncuya nedeni yazılır.
+	if bufferable and not buffered[player] then
+		buffered[player] = {
+			at = sim.time,
+			charge = charge,
+			aimZ = aimZ,
+			aimY = aimY,
+			shotType = shotType,
+			foot = foot,
+		}
+		lastKickAt[player] = now
+		shotHint("shotBuffered", "şut bekliyor → topa yetiş, kendiliğinden çıkacak (" .. reason .. ")")
+	else
+		shotHint("shotRejected", "şut çıkmadı: " .. reason)
+	end
 end)
 
 -- Sıfırlama da hız sınırlı: herhangi bir istemci bunu spamleyip maçı
@@ -842,7 +925,9 @@ local function keeperPose(dt)
 	return KeeperAnim.idle(keeperClock)
 end
 
-local function broadcastState(event, extra)
+-- hint: şut isteğinin NEDEN çıkmadığı (ya da tampondan çıktığı) oyuncuya
+-- yazıyla bildirilir. Sessiz red, "şut çekemiyorum" şikayetinin köküydü.
+function broadcastState(event, extra, hint)
 	if stateRemote then
 		stateRemote:FireAllClients({
 			goals = stats.goals,
@@ -852,6 +937,7 @@ local function broadcastState(event, extra)
 			sag = goalNet.sag,
 			event = event,
 			extra = extra,
+			hint = hint,
 		})
 	end
 end
@@ -880,6 +966,18 @@ RunService.Heartbeat:Connect(function(frameDt)
 			end
 		end
 		SceneBuilder.updateStrikerModel(strikerModel, striker:pose(), striker.pos, striker.facing, S)
+	end
+
+	-- 3a) Tampondaki şut istekleri: oyuncu topa yetişince şut kendiliğinden çıkar
+	for player, req in pairs(buffered) do
+		if sim.time - req.at > Config.BALL_CONTROL.shotBufferTime then
+			buffered[player] = nil
+			shotHint("shotExpired", string.format(
+				"şut kaçtı: %.2f s içinde topa yetişemedin", Config.BALL_CONTROL.shotBufferTime))
+		elseif startShot(player, req.charge, req.aimZ, req.aimY, req.shotType, req.foot) then
+			buffered[player] = nil
+			shotHint("shotFired", "şut çıktı (topa yetişildi)")
+		end
 	end
 
 	-- 3) Oyuncuların şutları: savurma tamamlanınca top ayrılır
@@ -991,6 +1089,7 @@ Players.PlayerRemoving:Connect(function(player)
 	controls[player] = nil
 	lastKickAt[player] = nil
 	pending[player] = nil
+	buffered[player] = nil
 end)
 
 -- Banner gerçegi soylesin: sutu kim atiyor?
@@ -2428,6 +2527,21 @@ Config.BALL_CONTROL = {
 	controlRadius = 1.45, -- bu mesafede top "ayakta" sayılır
 	kickReach = 2.00, -- şut atılabilen maksimum mesafe (1.70 ilk deneyimde çok dardı)
 	dribbleReach = 1.60,
+
+	--[[ SÜRÜŞ SAHİPLİĞİ: top sürerken dokunuş topu oyuncunun ÖNÜNE iter; bu
+	   yüzden "topa yaklaşınca şut çekemiyorum" oluyordu (5.5 m/s'de boşluk
+	   ~2.2 m > kickReach 2.00 m). Gerçek oyuncu bir adım öndeki topa da vurur:
+	   az önce dokunulmuş top, possessionReach içindeyse şut GEÇERLİDİR.
+	   Sahiplik yoksa (top uzaklardan yuvarlanıp geldi) şut tampona alınır. ]]
+	possessionReach = 3.20, -- az önce dokunulan top için şut menzili
+	possessionTime = 0.60, -- son dokunuşun üstünden bu kadar saniye geçtiyse sahiplik sürer
+
+	--[[ ŞUT TAMPONU (input buffering): SPACE bırakıldığında top menzil
+	   dışındaysa istek ÇÖPE GİTMEZ; oyuncu yetişene kadar kısa bir pencere
+	   bekletilir ve top menzile girince şut kendiliğinden çıkar. Pencere
+	   kapanırsa oyuncuya NEDENİ söylenir (sessiz red yok). ]]
+	shotBufferReach = 6.00, -- bu mesafeye kadar şut isteği tampona alınır
+	shotBufferTime = 0.75, -- tamponun açık kalma süresi (s)
 
 	-- Dokunuş (touch) modeli: gerçekte top sürerken saniyede ~3 dokunuş olur
 	touchInterval = 0.34,
@@ -4022,13 +4136,38 @@ function BallControl:update(ball, player, now)
 	return nil
 end
 
--- Şut atılabilir mi? (mesafe + yükseklik)
-function BallControl:canKick(ball, player)
-	local BC = self.cfg.BALL_CONTROL
+--[[ Oyuncu ile top arasındaki yatay mesafe (m). Şut kapısı, tampon kararı ve
+     istemci uyarısı aynı sayıyı kullanır ki kural ile geri bildirim ayrışmasın. ]]
+function BallControl:shotGap(ball, player)
 	local dx = ball.pos.x - player.pos.x
 	local dz = ball.pos.z - player.pos.z
-	local dist = math.sqrt(dx * dx + dz * dz)
-	return dist <= BC.kickReach and ball.pos.y <= BC.kickHeight
+	return math.sqrt(dx * dx + dz * dz)
+end
+
+--[[ Şut atılabilir mi? (mesafe + yükseklik + SÜRÜŞ SAHİPLİĞİ)
+
+     İki yol:
+       1) top kickReach içindeyse -> her zaman geçerli
+       2) top az önce DOKUNULAN bir topsa (sahiplik) possessionReach'e kadar
+          geçerli. Top sürerken dokunuş topu ileri ittiği için mesafe
+          kickReach'i geçer; eskiden bu durumda şut SESSİZCE reddediliyordu
+          ("topa yaklaştığımda topu sürdüğüm için şut çekemiyorum").
+
+     `now` verilmezse sahiplik yolu hiç denenmez (birim testler katı kuralı
+     ölçebilsin diye). SimLoop her zaman sim.time ile çağırır. ]]
+function BallControl:canKick(ball, player, now)
+	local BC = self.cfg.BALL_CONTROL
+	if ball.pos.y > BC.kickHeight then
+		return false
+	end
+	local dist = self:shotGap(ball, player)
+	if dist <= BC.kickReach then
+		return true
+	end
+	if now == nil then
+		return false
+	end
+	return dist <= BC.possessionReach and (now - self.lastTouch) <= BC.possessionTime
 end
 
 -- Güç -> hız eşlemesi (0..1 -> minKickSpeed..maxKickSpeed)

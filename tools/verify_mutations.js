@@ -16,7 +16,7 @@
  *
  * Hız için her vaka yalnızca ilgili kapıyı koşar (VERIFY_ONLY). Tam kanıt:
  *   npm run verify          → 13/13 kapı
- *   npm run verify:mutate   → 33/33 kusur yakalandı
+ *   npm run verify:mutate   → 40/40 kusur yakalandı
  */
 "use strict";
 
@@ -38,6 +38,7 @@ const F = {
   spec: "tools/spec.luau",
   validate: "src/shared/Core/Validate.luau",
   scene: "src/shared/World/SceneBuilder.luau",
+  control: "src/shared/Player/BallControl.luau",
 };
 
 /** [ad, dosyalar, koşulan kapılar, kaynak → kusurlu kaynak] */
@@ -80,7 +81,7 @@ const CASES = [
   ["M15 iz: index.html olmayan alanı okuyor", [F.index], "iz",
     (s) => s.replace("shot.curve", "shot.eğrilikYok")],
   ["M16 belge: README test sayısı bayatladı", [F.readme], "belge",
-    (s) => s.replace("**132 kontrol**", "**99 kontrol**")],
+    (s) => s.replace("**137 kontrol**", "**99 kontrol**")],
   ["M17 önizleme: preview/anim.html silindi", [F.anim], "onizleme",
     () => null], // özel: dosya silinir (aşağıda DELETE olarak ele alınır)
   ["M18 bir spec kontrolü başarısız", [F.spec], "testler",
@@ -125,6 +126,25 @@ const CASES = [
       "local speed = moveVel.Magnitude / S -- stud/s -> m/s")],
   ["M33 duruş kimliğe döndü (atletik bekleyiş silindi → heykel)", ["src/shared/Anim/WalkCycle.luau"], "testler",
     (s) => s.replace("pose.kneeL = Pose.joint(0.24 + 0.04 * breath, 0, 0)", "pose.kneeL = Pose.joint(0.02, 0, 0)")],
+
+  // ---- "topu sürdüğüm için şut çekemiyorum" kusur sınıfı ----
+  ["M34 sürüş sahipliği kaldırıldı (top öndeyken şut yine düşüyor)", [F.control], "testler",
+    (s) => s.replace("return dist <= BC.possessionReach and (now - self.lastTouch) <= BC.possessionTime",
+      "return false")],
+  ["M35 şut tamponu hiç doldurulmuyor (istek çöpe gidiyor)", [F.loop], "testler",
+    (s) => s.replace("if bufferable and not buffered[player] then", "if false and not buffered[player] then")],
+  ["M36 tampondaki şut hiç uygulanmıyor (oyuncu yetişse de çıkmıyor)", [F.loop], "testler",
+    (s) => s.replace("elseif startShot(player, req.charge, req.aimZ, req.aimY, req.shotType, req.foot) then",
+      "elseif false then")],
+  ["M37 sunucu hint alanını göndermiyor (istemci payload.hint okuyor)", [F.loop], "remote",
+    (s) => s.replace("hint = hint,", "")],
+  ["M38 istemci sunucunun nedenini HUD'a yazmıyor", [F.view], "testler",
+    (s) => s.replace('if type(payload.hint) == "string" and payload.hint ~= "" then', "if false then")],
+  ["M39 istemci uyarısı yine dar eşiği kullanıyor (sürüşte yanlış uyarı)", [F.view], "testler",
+    (s) => s.replace("if distM > POSSESSION_REACH then", "if distM > KICK_REACH then")],
+  ["M40 tampon penceresinin kapandığı nedeni boş gönderiliyor", [F.loop], "testler",
+    (s) => s.replace('"şut kaçtı: %.2f s içinde topa yetişemedin", Config.BALL_CONTROL.shotBufferTime))',
+      '"", Config.BALL_CONTROL.shotBufferTime))')],
 ];
 
 function read(rel) {

@@ -563,6 +563,27 @@ test("sut mesafesi ve guc-hiz eslemesi", function()
 	check(bc:canKick(ball, player), "1 m mesafede sut atilabilmeli")
 	player.pos = Vec3.new(5, 0, 0)
 	check(not bc:canKick(ball, player), "6 m mesafede sut atilamamali")
+	-- SÜRÜŞ SAHİPLİĞİ: top sürerken dokunuş topu öne iter; katı menzil (kickReach)
+	-- bu yüzden sürüş hâlinde hep aşılıyordu ("topu sürdüğüm için şut çekemiyorum").
+	local BC = Config.BALL_CONTROL
+	ball:setState(Vec3.new(11.0, r, 0), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	player.pos = Vec3.new(11.0 - 2.6, 0, 0) -- kickReach dışı, possessionReach içi
+	check(not bc:canKick(ball, player), "now verilmezse katı kural geçerli (2.6 m > kickReach)")
+	bc:kick(ball, player, Vec3.new(1, 0, 0), Vec3.new(0, 0, 0), 10.0) -- son dokunuş anı
+	check(bc:canKick(ball, player, 10.2),
+		"yeni dokunulan top 2.6 m öndeyken şut çıkmalı (sürüş sahipliği)")
+	check(not bc:canKick(ball, player, 10.0 + BC.possessionTime + 0.05),
+		"sahiplik süresi geçince şut çıkmamalı")
+	player.pos = Vec3.new(11.0 - (BC.possessionReach + 0.6), 0, 0)
+	check(not bc:canKick(ball, player, 10.1), "sahiplik menzilinin dışında şut çıkmamalı")
+	player.pos = Vec3.new(10.2, 0, 0)
+	ball.pos = Vec3.withY(ball.pos, BC.kickHeight + 0.4)
+	check(not bc:canKick(ball, player, 10.1), "yüksek top sahiplikle vurulmamalı")
+	ball:setState(Vec3.new(11.0, r, 0), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	near(bc:shotGap(ball, { pos = Vec3.new(8.0, 0, 0) }), 3.0, 1e-9, "shotGap yatay mesafeyi verir")
+	check(BC.possessionReach > BC.kickReach, "sahiplik bandı katı menzilden geniş olmalı")
+	check(BC.shotBufferReach > BC.possessionReach, "tampon menzili sahiplikten geniş olmalı")
+
 	near(bc:speedForCharge(0), Config.BALL_CONTROL.minKickSpeed, 1e-9, "min guc")
 	near(bc:speedForCharge(1), Config.BALL_CONTROL.maxKickSpeed, 1e-9, "max guc")
 end)
@@ -2122,6 +2143,45 @@ print("\n== 12. Uctan uca: istemci -> sunucu -> top -> istemci ==")
 -- her senaryo AYRI bir oyuncu ile koşulur (lastKickAt oyuncu başınadır) ve bu
 -- oyuncular `join = false` ile sunucunun oyuncu listesine eklenmez: böylece
 -- ölçümler (top hızı, launch sayısı) başka gövdelerden etkilenmez.
+--[[ Kare kare ilerlerken karakteri de yürütür (mock'ta HRP kendiliğinden
+     hareket etmez; hız yalnızca bir özelliktir). Top sürme senaryosu için şart. ]]
+local function runFramesMoving(world, hrp, seconds, speedMeters)
+	local dt = 1 / 60
+	local frames = math.max(1, math.floor(seconds / dt))
+	local errs = {}
+	for _ = 1, frames do
+		local pos = hrp.Position
+		hrp.CFrame = CFrame.lookAt(
+			pos + Vector3.new(speedMeters * STUDS_PER_METER * dt, 0, 0),
+			pos + Vector3.new(10, 0, 0))
+		local r = stepWorld(world, dt)
+		for _, e in ipairs(r.errors) do
+			errs[#errs + 1] = e
+		end
+	end
+	return errs
+end
+
+local function gapMeters(world, hrp)
+	local bp = world.ball.Position
+	local pp = hrp.Position
+	local dx = bp.X - pp.X
+	local dz = bp.Z - pp.Z
+	return math.sqrt(dx * dx + dz * dz) / STUDS_PER_METER
+end
+
+--[[ MatchState yayınlarında belli bir olayı (ve varsa hint metnini) bulur. ]]
+local function findStateEvent(world, eventName, fromIndex)
+	for i = math.max(1, fromIndex or 1), #world.mock.remoteLog do
+		local entry = world.mock.remoteLog[i]
+		if entry.name == "MatchState" and type(entry.args[1]) == "table"
+			and entry.args[1].event == eventName then
+			return entry.args[1], i
+		end
+	end
+	return nil
+end
+
 local function makeAttacker(world, name, behindMeters)
 	local player = world.mock.makePlayer(name, Vector3.new(0, 3, 0), { join = false })
 	local hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -2294,6 +2354,189 @@ test("sunucu tek basina da oyuncuyu animasyonlu tutuyor (istemci kapali)", funct
 		"sunucu kosu pozunu yazmiyor (durus -> kosu degismedi)")
 	check(jointsMoved(walkA, walkB) > 0,
 		"sunucu kosu dongusunu ilerletmiyor (iki kare ayni)")
+end)
+
+-- KULLANICININ İKİNCİ ŞİKAYETİ: "topa yaklaştığımda topu sürdüğüm için şut
+-- çekemiyorum". Sürüş dokunuşu topu oyuncunun önüne iter; mesafe katı menzili
+-- (kickReach) geçtiği için şut isteği düşüyordu. İki çözüm birlikte test edilir:
+-- sürüş sahipliği (az önce dokunulan topa vurulabilir) ve şut tamponu (istek
+-- çöpe gitmez, oyuncu yetişince çıkar).
+test("kosan oyuncu topu suruyor ve YINE de sut atabiliyor (surus sahipligi)", function()
+	local w = bootWorld({ striker = false })
+	check(w.installOk and w.serverOk and w.clientOk,
+		"dunya kurulamadi: " .. tostring(w.installErr or w.serverErr or w.clientErr))
+	local settled = settleBall(w)
+	check(#settled.errors == 0, "top oturtulurken hata: " .. table.concat(settled.errors, " | "))
+
+	local runner = w.mock.makePlayer("Dribbler", Vector3.new(0, 3, 0))
+	local hrp = runner.Character:FindFirstChild("HumanoidRootPart")
+	check(hrp ~= nil, "kosucunun karakter koku yok")
+	local bp = w.ball.Position
+	hrp.CFrame = CFrame.lookAt(
+		Vector3.new(bp.X - 1.2 * STUDS_PER_METER, bp.Y, bp.Z),
+		Vector3.new(bp.X + 10, bp.Y, bp.Z))
+	local RUN_SPEED = 6.0
+	hrp.AssemblyLinearVelocity = Vector3.new(RUN_SPEED * STUDS_PER_METER, 0, 0)
+
+	-- Top sür: dokunuşlar topu öne iter (README: 5.5 m/s'de boşluk ~2.2 m).
+	-- Boşluk katı menzili (kickReach) AŞAR AŞMAZ dur — sürüş modeli ileride
+	-- değişirse test yine tam olarak aynı durumu (sürüş hâlinde şut) ölçsün.
+	local runErrs = runFramesMoving(w, hrp, 0.4, RUN_SPEED)
+	local gap = gapMeters(w, hrp)
+	for _ = 1, 10 do
+		if gap > Config.BALL_CONTROL.kickReach then
+			break
+		end
+		for _, e in ipairs(runFramesMoving(w, hrp, 0.2, RUN_SPEED)) do
+			runErrs[#runErrs + 1] = e
+		end
+		gap = gapMeters(w, hrp)
+	end
+	check(#runErrs == 0, "kosu kareleri hata verdi: " .. table.concat(runErrs, " | "))
+	check(gap > Config.BALL_CONTROL.kickReach, string.format(
+		"on kosul: surus topu kati menzilin (%.2f m) disina itmeli, olculen %.2f m — aksi halde test hicbir sey kanitlamaz",
+		Config.BALL_CONTROL.kickReach, gap))
+	check(gap <= Config.BALL_CONTROL.possessionReach, string.format(
+		"on kosul: bosluk sahiplik bandini (%.2f m) asmamali, olculen %.2f m — aksi halde tampon yolu test edilir",
+		Config.BALL_CONTROL.possessionReach, gap))
+
+	-- Sürüş hâlinde şut: sahiplik yüzünden ÇIKMALI
+	local mark = #w.mock.remoteLog
+	w.kickRemote.OnServerEvent:Fire(runner, 1.0, 0.0, 1.0, "instep", "R")
+	local res = stepWorld(w, 1.2)
+	check(#res.errors == 0, "sut kareleri hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.launches >= 1, string.format(
+		"top surerken sut cikmadi (bosluk %.2f m, launches=%d): surus sahipligi calismiyor",
+		gap, res.launches))
+	check(res.maxSpeed > 8, string.format(
+		"surus sirasindaki sut topu hizlandirmadi: %.2f m/s", res.maxSpeed))
+	check(findStateEvent(w, "shotRejected", mark) == nil,
+		"surus sirasindaki sut reddedildi: " .. tostring((findStateEvent(w, "shotRejected", mark) or {}).hint))
+end)
+
+test("menzil disindaki sut istegi cope gitmiyor: tampona alinip oyuncu yetisince cikiyor", function()
+	local w = bootWorld({ striker = false })
+	check(w.installOk and w.serverOk, "dunya kurulamadi: " .. tostring(w.installErr or w.serverErr))
+	local settled = settleBall(w)
+	check(#settled.errors == 0, "top oturtulurken hata: " .. table.concat(settled.errors, " | "))
+
+	local chaser = w.mock.makePlayer("Chaser", Vector3.new(0, 3, 0))
+	local hrp = chaser.Character:FindFirstChild("HumanoidRootPart")
+	local bp = w.ball.Position
+	-- Sahiplik bandının dışında, tampon menzilinin içinde; topa HİÇ dokunmadı
+	local farPos = Vector3.new(bp.X - 4.0 * STUDS_PER_METER, bp.Y, bp.Z)
+	hrp.CFrame = CFrame.lookAt(farPos, farPos + Vector3.new(10, 0, 0))
+	hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+
+	local mark = #w.mock.remoteLog
+	w.kickRemote.OnServerEvent:Fire(chaser, 0.8, 0.0, 1.0, "instep", "R")
+	local first = stepWorld(w, 0.25)
+	check(#first.errors == 0, "kareler hata verdi: " .. table.concat(first.errors, " | "))
+	check(first.launches == 0,
+		"4 m uzaktaki top aninda vuruldu: sahiplik/tampon kurali fazla gevsek")
+
+	local bufferedEvent = findStateEvent(w, "shotBuffered", mark)
+	check(bufferedEvent ~= nil, "tampona alinan sut oyuncuya bildirilmedi (sessiz bekleyis)")
+	check(type(bufferedEvent.hint) == "string" and #bufferedEvent.hint > 8,
+		"tampon bildirimi neden icermiyor: " .. tostring(bufferedEvent.hint))
+
+	-- Oyuncu topa yetişir -> tampondaki şut kendiliğinden çıkmalı
+	hrp.CFrame = CFrame.lookAt(
+		Vector3.new(bp.X - 0.8 * STUDS_PER_METER, bp.Y, bp.Z),
+		Vector3.new(bp.X + 10, bp.Y, bp.Z))
+	local res = stepWorld(w, 1.2)
+	check(#res.errors == 0, "sut kareleri hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.launches >= 1,
+		"tampondaki sut oyuncu yetisince cikmadi (launches=" .. tostring(res.launches) .. ")")
+	local fired = findStateEvent(w, "shotFired", mark)
+	check(fired ~= nil, "tampondan cikan sut oyuncuya bildirilmedi")
+	check(type(fired.hint) == "string" and #fired.hint > 4, "cikis bildirimi bos")
+end)
+
+test("tampon penceresi kapaninca sut dusuyor ve NEDENI bildiriliyor", function()
+	local w = bootWorld({ striker = false })
+	check(w.installOk and w.serverOk, "dunya kurulamadi: " .. tostring(w.installErr or w.serverErr))
+	local settled = settleBall(w)
+	check(#settled.errors == 0, "top oturtulurken hata: " .. table.concat(settled.errors, " | "))
+
+	local late = w.mock.makePlayer("Late", Vector3.new(0, 3, 0))
+	local hrp = late.Character:FindFirstChild("HumanoidRootPart")
+	local bp = w.ball.Position
+	local farPos = Vector3.new(bp.X - 4.0 * STUDS_PER_METER, bp.Y, bp.Z)
+	hrp.CFrame = CFrame.lookAt(farPos, farPos + Vector3.new(10, 0, 0))
+	hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+
+	local mark = #w.mock.remoteLog
+	w.kickRemote.OnServerEvent:Fire(late, 1.0, 0.0, 1.0, "instep", "R")
+	check(findStateEvent(w, "shotBuffered", mark) ~= nil, "istek tampona alinmadi")
+
+	-- Oyuncu yerinde sayar: pencere (shotBufferTime) kapanmalı
+	local res = stepWorld(w, Config.BALL_CONTROL.shotBufferTime + 0.5)
+	check(#res.errors == 0, "kareler hata verdi: " .. table.concat(res.errors, " | "))
+	check(res.launches == 0, "pencere kapandiktan sonra sut cikti (tampon sonsuz)")
+	local expired = findStateEvent(w, "shotExpired", mark)
+	check(expired ~= nil, "pencerenin kapandigi oyuncuya soylenmedi (sessiz dusus)")
+	check(type(expired.hint) == "string" and #expired.hint > 8,
+		"pencere bildirimi neden icermiyor: " .. tostring(expired.hint))
+
+	-- Tampon menzilinin de dışındaki istek doğrudan reddedilir (bekletilmez)
+	local mark2 = #w.mock.remoteLog
+	local bp2 = w.ball.Position
+	hrp.CFrame = CFrame.lookAt(
+		Vector3.new(bp2.X - 14.0 * STUDS_PER_METER, bp2.Y, bp2.Z),
+		Vector3.new(bp2.X + 10, bp2.Y, bp2.Z))
+	stepWorld(w, Config.BALL_CONTROL.shotBufferTime + 0.6) -- hiz siniri penceresi bosalsin
+	w.kickRemote.OnServerEvent:Fire(late, 1.0, 0.0, 1.0, "instep", "R")
+	local res2 = stepWorld(w, 0.4)
+	check(res2.launches == 0, "14 m uzaktaki top vuruldu (otorite gevşedi)")
+	local rejected = findStateEvent(w, "shotRejected", mark2)
+	check(rejected ~= nil, "tampon menzili disindaki istek icin neden gonderilmedi")
+	check(type(rejected.hint) == "string" and rejected.hint:find("menzil", 1, true) ~= nil,
+		"ret nedeni mesafe/menzil icermiyor: " .. tostring(rejected.hint))
+end)
+
+test("sunucunun ret nedeni istemcide HUD'a yaziliyor (ekrana cikmayan red yok)", function()
+	-- clientWorld: yerel oyuncuyu tampon menzilinin dışına ışınla (9 m)
+	local bp = clientWorld.ball.Position
+	local farPos = Vector3.new(bp.X - 9 * STUDS_PER_METER, bp.Y, bp.Z)
+	clientWorld.hrp.CFrame = CFrame.lookAt(farPos, farPos + Vector3.new(10, 0, 0))
+	clientWorld.hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	stepWorld(clientWorld, 2.6) -- önceki testin ipucu penceresi kapansın
+
+	local mark = #clientWorld.mock.remoteLog
+	clientWorld.mock.pressKey("Space")
+	stepWorld(clientWorld, 0.95)
+	clientWorld.mock.releaseKey("Space")
+	stepWorld(clientWorld, 0.3)
+
+	local rejected = findStateEvent(clientWorld, "shotRejected", mark)
+	check(rejected ~= nil, "sunucu menzil disindaki istek icin neden gondermedi")
+	check(type(rejected.hint) == "string" and #rejected.hint > 8,
+		"gonderilen neden bos: " .. tostring(rejected.hint))
+	local text = hintText(clientWorld)
+	check(type(text) == "string" and text:find(rejected.hint, 1, true) ~= nil,
+		"sunucunun nedeni HUD'a yazilmadi. HUD: " .. tostring(text) .. " | sunucu: " .. tostring(rejected.hint))
+end)
+
+test("surus bandinda istemci yanlis uyari vermiyor (sahiplikle sut cikar)", function()
+	stepWorld(clientWorld, 2.6) -- sunucu ipucu penceresi kapansın
+	local bp = clientWorld.ball.Position
+	-- Katı menzilin dışında ama sahiplik bandının içinde: sunucu şutu kabul eder,
+	-- istemci "TOPA YAKLAŞ" diye bağırmamalı (dar eşik kullanıldığının kanıtı).
+	local midPos = Vector3.new(bp.X - 2.5 * STUDS_PER_METER, bp.Y, bp.Z)
+	clientWorld.hrp.CFrame = CFrame.lookAt(midPos, midPos + Vector3.new(10, 0, 0))
+	clientWorld.hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	local steps = stepWorld(clientWorld, 0.3)
+	check(#steps.errors == 0, "kareler hata verdi: " .. table.concat(steps.errors, " | "))
+	local text = hintText(clientWorld)
+	check(text:find("TOPA YAKLA", 1, true) == nil,
+		"surus bandinda gereksiz uyari: " .. tostring(text))
+	check(text:find("SPACE", 1, true) ~= nil, "normal ipucu kayboldu: " .. tostring(text))
+	-- Katı menzilin içindeyse HUD oyuncuya hazır olduğunu söyler
+	placePlayerAtBall(clientWorld, 0.8)
+	stepWorld(clientWorld, 0.3)
+	local ready = hintText(clientWorld)
+	check(ready:find("HAZIR", 1, true) ~= nil, "menzil icinde 'ŞUT HAZIR' gostergesi yok: " .. tostring(ready))
 end)
 
 local e2e = nil

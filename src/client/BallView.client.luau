@@ -38,6 +38,11 @@ local GOAL_PLANE = HALF_LENGTH * S
 local CHARGE_TIME = (Config and Config.BALL_CONTROL and Config.BALL_CONTROL.chargeTime) or 0.9
 local BC = (Config and Config.BALL_CONTROL) or {}
 local KICK_REACH = BC.kickReach or 2.0
+-- Sunucuyla AYNI kural: top sürerken dokunuş topu öne ittiği için şut menzili
+-- "sahiplik" bandına kadar geniştir; o bandın dışında da istek tampona alınır.
+-- İstemci dar eşiği (kickReach) kullandığında oyuncu sürüşte yanlış uyarı görür.
+local POSSESSION_REACH = BC.possessionReach or 3.2
+local BUFFER_REACH = BC.shotBufferReach or 6.0
 
 -- ---------------------------------------------------------------- prosedürel oyuncu animasyonu
 -- Asset yok: karakterin R15 eklemleri her karede KODLA pozlanır. Bu istemcide
@@ -94,24 +99,39 @@ end
 -- Sunucunun şutu SESSİZCE reddettiği durum (top menzil dışında) istemcide
 -- görünür olmalı: yoksa oyuncu "şut çekemiyorum" der. reachState her karede
 -- onFrame tarafından güncellenir; metin buradan okunur.
-local reachState = nil -- nil (menzilde) | "far:<metre>"
+local reachState = nil -- nil (menzilde) | sayı: topun metre cinsinden uzaklığı
+
+-- Sunucunun gönderdiği şut geri bildirimi (tampona alındı / reddedildi / çıktı).
+-- Sunucu otoriter taraf olduğu için asıl doğru bilgi budur; istemcideki mesafe
+-- ölçümü yalnızca anlık ipucudur.
+local serverHint = nil
+local serverHintUntil = 0
+-- Top katı menzil içindeyse HUD "ŞUT HAZIR" der: oyuncu SPACE'in boşa
+-- gitmeyeceğini görür (sahiplik bandında da şut çıkar, ama kesin olan bu).
+local inStrictReach = false
 
 local function updateHint()
 	if not hint then
 		return
 	end
+	if serverHint and animClock < serverHintUntil then
+		-- Sunucunun verdiği neden her şeyden önce gelir (otoriter bilgi).
+		hint.Text = serverHint .. "   |   " .. shotLabel()
+		hint.TextColor3 = Color3.fromRGB(255, 226, 140)
+		return
+	end
 	if reachState then
 		-- Uyarı, vuruş türü/ayak bilgisini SİLMEZ: oyuncu o anda T/F ile
 		-- hazırlık yapıyor olabilir, ikisi birlikte görünmeli.
-		local meters = reachState:sub(5)
-		hint.Text = "TOPA YAKLAŞ → " .. meters .. " m uzakta  ·  şut menzili "
-			.. string.format("%.1f", KICK_REACH) .. " m  ·  WASD ile koş   |   "
-			.. shotLabel()
+		local verdict = (reachState > BUFFER_REACH) and "şut çıkmaz" or "koşunca şut çıkar"
+		hint.Text = "TOPA YAKLAŞ → " .. string.format("%.1f", reachState)
+			.. " m önde  ·  menzil " .. string.format("%.1f", POSSESSION_REACH)
+			.. " m  ·  " .. verdict .. "  ·  WASD ile koş   |   " .. shotLabel()
 		hint.TextColor3 = Color3.fromRGB(255, 206, 110)
 		return
 	end
-	hint.Text = string.format(HINT_FORMAT, shotLabel())
-	hint.TextColor3 = Color3.fromRGB(232, 240, 246)
+	hint.Text = (inStrictReach and "ŞUT HAZIR  ·  " or "") .. string.format(HINT_FORMAT, shotLabel())
+	hint.TextColor3 = inStrictReach and Color3.fromRGB(150, 255, 190) or Color3.fromRGB(232, 240, 246)
 end
 
 local function cycleShotType()
@@ -301,6 +321,15 @@ if stateRemote then
 		elseif payload.event == "save" then
 			scoreLabel.TextColor3 = Color3.fromRGB(255, 210, 110)
 		end
+		-- Şut geri bildirimi: sunucu bir şutu reddetti/tampona aldı/çıkardı ise
+		-- NEDENİ HUD'da kısa süre gösterilir (sessiz red yok).
+		if type(payload.hint) == "string" and payload.hint ~= "" then
+			serverHint = payload.hint
+			serverHintUntil = animClock + 2.4
+			updateHint()
+		elseif payload.event == "shotFired" then
+			serverHint = nil
+		end
 	end)
 end
 
@@ -489,13 +518,15 @@ local function onFrame(dt)
 		local dx = hrp.Position.X - serverBall.Position.X
 		local dz = hrp.Position.Z - serverBall.Position.Z
 		local distM = math.sqrt(dx * dx + dz * dz) / S
-		if distM > KICK_REACH then
-			reachState = "far:" .. string.format("%.1f", distM)
+		if distM > POSSESSION_REACH then
+			reachState = distM
 		else
 			reachState = nil
 		end
+		inStrictReach = distM <= KICK_REACH
 	else
 		reachState = nil
+		inStrictReach = false
 	end
 	updateHint()
 
