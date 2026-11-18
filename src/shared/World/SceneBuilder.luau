@@ -26,9 +26,28 @@ local LINE_Y = 0.03 -- çim üstünden yükseklik (stud)
 -- Lua 5.3: math.atan(y, x) | Luau: math.atan2(y, x)
 local atan2 = math.atan2 or math.atan
 
+-- Kardeş adları BENZERSİZ olmalı. Roblox'ta aynı ada sahip iki çocuk yasaldir ama
+-- `FindFirstChild("PenaltyAreaSide")` hangisini döndürdüğü belirsizdir ve Studio
+-- ağacı okunmaz olur. Çizgilerde simetrik çiftler (kuzey/güney ceza sahası kenarı,
+-- iki kale tarafı) aynı mantıksal adı paylaşır; çakışmaya sayaç eklenir.
+-- build() eski FootballPitch'i yok ettiği için adlar her kurulumda deterministiktir.
+local function uniqueName(parent, name)
+	if parent == nil then
+		return name
+	end
+	if parent:FindFirstChild(name) == nil then
+		return name
+	end
+	local suffix = 2
+	while parent:FindFirstChild(name .. tostring(suffix)) ~= nil do
+		suffix = suffix + 1
+	end
+	return name .. tostring(suffix)
+end
+
 local function makePart(parent, name, sizeStuds, cframe, color, material, opts)
 	local p = Instance.new("Part")
-	p.Name = name
+	p.Name = uniqueName(parent, name)
 	p.Anchored = true
 	p.Size = sizeStuds
 	p.CFrame = cframe
@@ -174,22 +193,25 @@ local function buildLines(root, opts)
 
 	-- Ceza sahası / kale sahası / penaltı noktası
 	local sides = opts.half and { 1 } or { -1, 1 }
+	-- Tam sahada iki taraf da aynı çizgileri çizer; ada taraf etiketi (East/West)
+	-- ve simetri etiketi (North/South) eklenir ki hiçbir kardeş adı çakışmasın.
 	for _, side in ipairs(sides) do
 		local gl = side * HL
 		local paX = gl - side * P.penaltyAreaLength
 		local gaX = gl - side * P.goalAreaLength
+		local sideTag = side > 0 and "East" or "West"
 
-		drawLine(folder, "PenaltyAreaLine", paX, -P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
-		drawLine(folder, "PenaltyAreaSide", gl, -P.penaltyAreaHalfWidth, paX, -P.penaltyAreaHalfWidth)
-		drawLine(folder, "PenaltyAreaSide", gl, P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaLine" .. sideTag, paX, -P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaSide" .. sideTag .. "North", gl, -P.penaltyAreaHalfWidth, paX, -P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaSide" .. sideTag .. "South", gl, P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
 
-		drawLine(folder, "GoalAreaLine", gaX, -P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
-		drawLine(folder, "GoalAreaSide", gl, -P.goalAreaHalfWidth, gaX, -P.goalAreaHalfWidth)
-		drawLine(folder, "GoalAreaSide", gl, P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaLine" .. sideTag, gaX, -P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaSide" .. sideTag .. "North", gl, -P.goalAreaHalfWidth, gaX, -P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaSide" .. sideTag .. "South", gl, P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
 
 		makePart(
 			folder,
-			"PenaltySpot",
+			"PenaltySpot" .. sideTag,
 			Vector3.new(0.22 * S, 0.05, 0.22 * S),
 			CFrame.new(v3(gl - side * P.penaltySpot, LINE_Y / S, 0)),
 			Color3.fromRGB(246, 250, 252),
@@ -211,10 +233,12 @@ local function buildGoal(parent, side)
 	goalFolder.Parent = parent
 
 	-- Yan direkler (silindir ekseni X'tir; dikey yapmak için Z'de 90°)
+	-- Adlar bilerek Kuzey/Güney: iki direk aynı mantıksal parçanın simetriği, ama
+	-- aynı Name ile FindFirstChild belirsizleşirdi (bkz. uniqueName).
 	for _, sz in ipairs({ -1, 1 }) do
 		makePart(
 			goalFolder,
-			"Post",
+			"Post" .. (sz < 0 and "North" or "South"),
 			Vector3.new(P.goalHeight * S, postDia * S, postDia * S),
 			CFrame.new(v3(gl, P.goalHeight / 2, sz * P.goalHalfWidth)) * CFrame.Angles(0, 0, math.rad(90)),
 			frameColor,
@@ -252,7 +276,7 @@ local function buildGoal(parent, side)
 	for _, sz in ipairs({ -1, 1 }) do
 		makePart(
 			goalFolder,
-			"NetSide",
+			"NetSide" .. (sz < 0 and "North" or "South"),
 			Vector3.new(P.goalDepth * S, P.goalHeight * S, 0.05 * S),
 			CFrame.new(((gl + backX) / 2) * S, (P.goalHeight / 2) * S, sz * P.goalHalfWidth * S),
 			netColor,
@@ -462,18 +486,10 @@ function SceneBuilder.updateStrikerModel(strikerModel, pose, pos, yaw, studsPerM
 end
 
 --[[ Kaleci görselinin dünya uzayındaki el noktaları (hata ayıklama/teşhis). ]]
-function SceneBuilder.keeperHands(keeperModel, pose, pos, studsPerMeter)
-	if not keeperModel then
-		return nil
-	end
-	local s = studsPerMeter or S
-	local solved = SceneBuilder.updateKeeperModel(keeperModel, pose, pos, s)
-	local out = {}
-	for _, side in ipairs({ "L", "R" }) do
-		local hand, forward, right, up = Rig.toWorld(solved.pos["hand" .. side], Vec3.new(pos.x * s, 0, pos.z * s), keeperYaw(keeperModel.side or 1), s)
-		out[side] = hand
-	end
-	return out
-end
+-- NOT: Burada daha önce `SceneBuilder.keeperHands` vardı: eldiven dünya
+-- konumlarını döndürüyordu ama HİÇBİR yerden çağrılmıyordu ve her çağrıda tüm
+-- kaleci pozunu yeniden çözüyordu (updateKeeperModel zaten aynı işi yapıyor ve
+-- eldivenleri yerleştiriyor). Ölü dışa aktarım olarak kaldırıldı; eldiven
+-- konumları PartRig + updateKeeperModel üzerinden tek yoldan gelir.
 
 return SceneBuilder

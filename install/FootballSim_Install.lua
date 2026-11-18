@@ -8,7 +8,7 @@
 	  4) Sahne kurulur, scriptler yerleşir. Play'e bas: SPACE ile şut çek.
 
 	Yeniden üretmek için: npm run install:build
-	Kaynak: src/ (26 modül)
+	Kaynak: src/ (27 modül)
 ]]
 
 local SOURCES = {
@@ -28,10 +28,11 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local ContextActionService = game:GetService("ContextActionService")
 local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
+-- CurrentCamera, LocalScript çok erken çalışırsa nil olabilir; kare döngüsünde
+-- tekrar denenir (aşağıda resolveCamera).
 local camera = Workspace.CurrentCamera
 
 -- Config (varsa gerçek değerler, yoksa makul varsayılanlar)
@@ -46,7 +47,6 @@ do
 	end
 end
 local S = Config and Config.STUDS_PER_METER or 3.5714
-local R = Config and Config.BALL.radius or 0.11
 local PITCH = Config and Config.PITCH
 local HALF_LENGTH = PITCH and PITCH.halfLength or 52.5
 local GOAL_PLANE = HALF_LENGTH * S
@@ -58,46 +58,57 @@ local shotTypes = SHOT.types or { "instep" }
 local shotIndex = 1
 local currentFoot = "R" -- "L" | "R"
 
+local HINT_FORMAT = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (%s)   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+
+-- ÖNEMLİ: `hint` etiketi aşağıda (HUD bölümünde) oluşturuluyor. Lua'da bir
+-- local'in kapsamı bildiriminden SONRA başlar; bu yüzden `local hint` burada
+-- bildirilmezse fonksiyonların içindeki `hint` GLOBAL sayılır ve T/F'ye
+-- basıldığında "attempt to index a nil value (global 'hint')" hatası verir.
+local hint
+
 local function shotLabel()
 	local st = shotTypes[shotIndex] or "instep"
 	return (SHOT.labels and SHOT.labels[st] or st) .. "  |  ayak: " .. currentFoot
 end
 
+local function updateHint()
+	if hint then
+		hint.Text = string.format(HINT_FORMAT, shotLabel())
+	end
+end
+
 local function cycleShotType()
 	shotIndex = shotIndex % #shotTypes + 1
-	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+	updateHint()
 end
 
 local function toggleFoot()
 	currentFoot = (currentFoot == "R") and "L" or "R"
-	hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+	updateHint()
 end
 
 -- ---------------------------------------------------------------- karakter
 local character, hrp
 local humanoid
-local function bindCharacter(char)
-	character = char
-	hrp = char:WaitForChild("HumanoidRootPart", 10)
-	humanoid = char:WaitForChild("Humanoid", 10)
-end
-if player.Character then
-	bindCharacter(player.Character)
-end
-player.CharacterAdded:Connect(bindCharacter)
 
--- Jump'i devre dışı bırak / geri yükle (Space şut için kullanılır)
+-- Zıplamayı aç/kapat. SPACE şut gücü için kullanıldığından karakterin
+-- zıplamaması gerekir.
+-- NOT: `Humanoid.Jump = false` zıplamayı KAPATMAZ; Jump yalnızca "şimdi zıpla"
+-- isteğidir. Doğru API `SetStateEnabled(HumanoidStateType.Jumping, false)`.
 local jumpConn
 local function setJumpEnabled(enabled)
-	if humanoid then
-		humanoid.Jump = enabled
+	if not humanoid then
+		return
 	end
+	pcall(function()
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, enabled)
+	end)
 	if jumpConn then
 		jumpConn:Disconnect()
 		jumpConn = nil
 	end
 	if not enabled then
-		-- Space basıldığında karakterin zıplamasını engelle
+		-- Yedek: bir şekilde Jumping durumuna girerse hemen geri kalk
 		jumpConn = humanoid.StateChanged:Connect(function(_, newState)
 			if newState == Enum.HumanoidStateType.Jumping then
 				humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
@@ -105,6 +116,17 @@ local function setJumpEnabled(enabled)
 		end)
 	end
 end
+
+local function bindCharacter(char)
+	character = char
+	hrp = char:WaitForChild("HumanoidRootPart", 10)
+	humanoid = char:WaitForChild("Humanoid", 10)
+	setJumpEnabled(false)
+end
+if player.Character then
+	bindCharacter(player.Character)
+end
+player.CharacterAdded:Connect(bindCharacter)
 
 -- -------------------------------------------------------------------- top
 local serverBall = Workspace:WaitForChild("MatchBall", 30)
@@ -154,7 +176,10 @@ gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.Parent = player:WaitForChild("PlayerGui")
 
-local hint = Instance.new("TextLabel")
+-- `hint` yukarıda BİLDİRİLDİ (local hint), burada yalnızca ATANIR: yeni bir
+-- `local` açarsak updateHint() eski (nil) upvalue'yu görmeye devam eder.
+hint = Instance.new("TextLabel")
+hint.Name = "Hint"
 hint.AnchorPoint = Vector2.new(0.5, 1)
 hint.Position = UDim2.new(0.5, 0, 1, -26)
 hint.Size = UDim2.new(0, 560, 0, 34)
@@ -164,7 +189,7 @@ hint.BorderSizePixel = 0
 hint.TextColor3 = Color3.fromRGB(232, 240, 246)
 hint.Font = Enum.Font.GothamMedium
 hint.TextSize = 15
-hint.Text = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (" .. shotLabel() .. ")   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+updateHint()
 hint.Parent = gui
 
 local hintCorner = Instance.new("UICorner")
@@ -173,6 +198,7 @@ hintCorner.Parent = hint
 
 -- Güç barı
 local barBack = Instance.new("Frame")
+barBack.Name = "ChargeBar"
 barBack.AnchorPoint = Vector2.new(0.5, 1)
 barBack.Position = UDim2.new(0.5, 0, 1, -68)
 barBack.Size = UDim2.new(0, 320, 0, 14)
@@ -186,6 +212,7 @@ barBackCorner.CornerRadius = UDim.new(0, 7)
 barBackCorner.Parent = barBack
 
 local barFill = Instance.new("Frame")
+barFill.Name = "ChargeFill"
 barFill.Size = UDim2.new(0, 0, 1, 0)
 barFill.BackgroundColor3 = Color3.fromRGB(61, 220, 132)
 barFill.BorderSizePixel = 0
@@ -197,6 +224,7 @@ barFillCorner.Parent = barFill
 
 -- Skor / duyuru
 local scoreLabel = Instance.new("TextLabel")
+scoreLabel.Name = "Score"
 scoreLabel.AnchorPoint = Vector2.new(0.5, 0)
 scoreLabel.Position = UDim2.new(0.5, 0, 0, 14)
 scoreLabel.Size = UDim2.new(0, 420, 0, 28)
@@ -239,9 +267,31 @@ local charge = 0
 -- Animasyonları (adaptif şut / kaleci dalışı) yakından izlemek için.
 local spectator = false
 
-local function computeAim()
-	local origin = camera.CFrame.Position
-	local dir = camera.CFrame.LookVector
+-- Kamera Scriptable ve sabit bir konumda durduğu için (aşağıda updateCamera)
+-- kameranın LookVector'ü oyuncunun baktığı yer DEĞİLDİR: nişan fareyle alınır.
+-- Sıra: (1) fare ekran noktasından dünya ışını, (2) ışın kale düzlemini önden
+-- kesmiyorsa kamera bakışı. Böylece gökyüzüne nişan alınca şut sessizce yutulmaz.
+local function mouseRay(cam)
+	local ok, loc = pcall(function()
+		return UserInputService:GetMouseLocation()
+	end)
+	if not ok or not loc then
+		return nil
+	end
+	local okRay, ray = pcall(function()
+		return cam:ViewportPointToRay(loc.X, loc.Y)
+	end)
+	if not okRay or not ray or not ray.Direction then
+		return nil
+	end
+	return ray
+end
+
+-- Bir ışını kale düzlemine (X = GOAL_PLANE) izdüşürür; önden kesmiyorsa nil.
+local function projectToGoalPlane(origin, dir)
+	if not origin or not dir then
+		return nil
+	end
 	if dir.X <= 0.05 then
 		return nil
 	end
@@ -253,6 +303,20 @@ local function computeAim()
 	local z = math.clamp(hit.Z, -3.3 * S, 3.3 * S)
 	local y = math.clamp(hit.Y, 0.25 * S, 2.3 * S)
 	return Vector3.new(GOAL_PLANE, y, z)
+end
+
+local function computeAim()
+	if not camera then
+		return nil
+	end
+	local ray = mouseRay(camera)
+	if ray then
+		local aim = projectToGoalPlane(ray.Origin, ray.Direction)
+		if aim then
+			return aim
+		end
+	end
+	return projectToGoalPlane(camera.CFrame.Position, camera.CFrame.LookVector)
 end
 
 local function fireKick()
@@ -285,6 +349,22 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	end
 end)
 
+-- BIRAKMA = ŞUT. Güç barı basılı tutarken dolar; tuş bırakıldığında şut
+-- sunucuya gönderilir (sunucu gücü/nişanı doğrular, şutu kendi uygular).
+UserInputService.InputEnded:Connect(function(input)
+	if input.KeyCode ~= Enum.KeyCode.Space then
+		return
+	end
+	if not charging then
+		return
+	end
+	charging = false
+	barBack.Visible = false
+	barFill.Size = UDim2.new(0, 0, 1, 0)
+	fireKick()
+	charge = 0
+end)
+
 -- ------------------------------------------------------------- kare döngüsü
 local renderPos = serverBall.Position
 local lastTarget = serverBall.Position
@@ -292,7 +372,14 @@ local ballVel = Vector3.zero
 local camPos = Vector3.new(-90, 60, 25)
 local camLook = Vector3.zero
 local camInit = false
-local stats = { goals = 0, saves = 0, kicks = 0 }
+
+-- CurrentCamera, LocalScript ilk karelerden önce hazır değilse nil kalabilir.
+local function resolveCamera()
+	if not camera then
+		camera = Workspace.CurrentCamera
+	end
+	return camera
+end
 
 local function onFrame(dt)
 	-- Top: sunucu konumunu yumuşat + hız tahmini
@@ -305,7 +392,9 @@ local function onFrame(dt)
 	visual.CFrame = CFrame.new(renderPos)
 
 	-- Kamera: karakterin arkasında (ya da izleme kipinde topun arkasında)
-	if camera then
+	local cam = resolveCamera()
+	if cam then
+		camera = cam
 		local focus = renderPos
 		local desiredPos, desiredLook
 		if spectator then
@@ -383,6 +472,7 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local Vec3 = require(Shared.Core.Vec3)
+local Validate = require(Shared.Core.Validate)
 local Rng = require(Shared.Core.Rng)
 local Ballistics = require(Shared.Core.Ballistics)
 local Sim = require(Shared.Sim)
@@ -396,9 +486,12 @@ local KickAnim = require(Shared.Anim.KickAnim)
 local HumanoidPose = require(Shared.Anim.HumanoidPose)
 
 local S = Config.STUDS_PER_METER
-local R = Config.BALL.radius
 local P = Config.PITCH
 local ANIM = Config.ANIM or {}
+
+-- Lua 5.3: math.atan(y, x) | Luau: math.atan2(y, x). Ikisi de desteklensin
+-- (Vec3 ve SceneBuilder ile ayni desen; test kosucusu Lua 5.3 kullanir).
+local atan2 = math.atan2 or math.atan
 
 -- ---------------------------------------------------------------- 1) Sahne
 local scene = SceneBuilder.build({ half = true, goalSide = 1 })
@@ -459,7 +552,7 @@ local function playerState(player)
 		return nil
 	end
 	local look = hrp.CFrame.LookVector
-	local facing = math.atan2(look.Z, look.X) -- +x'ten +z'ye (Vec3.yaw ile aynı)
+	local facing = atan2(look.Z, look.X) -- +x'ten +z'ye (Vec3.yaw ile aynı)
 	return BallControl.playerState(
 		Vector3.new(hrp.Position.X, 0, hrp.Position.Z),
 		hrp.AssemblyLinearVelocity,
@@ -492,6 +585,35 @@ resetBall()
 local lastKickAt = {}
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 
+--[[ İstemciden gelen HER değer güvenilmezdir (exploiter arbitrary tablo/string
+	gönderebilir). KickAnim, `SHOT[shotType]` ve `"hip" .. foot` kullandığı için
+	doğrulanmamış girdi sunucu handler'ını patlatır (ör. shotType = "labels" ->
+	sp.power = nil -> aritmetik hatası; foot = {} -> concatenate hatası).
+	Bu yüzden beyaz liste: listede yoksa varsayılana düş. ]]
+-- Politika: BEYAZ LİSTE + VARSAYILANA DÜŞ. Kurallar src/shared/Core/Validate.luau
+-- içinde (birim testli); burada yalnızca bu dosyanın kullandığı kısa adlar bağlanır.
+-- Çağrı yerleri (isFiniteVec3/sanitize*) bilerek aynı isimde kalır:
+-- tools/verify.js "her launch bölgesi isFiniteVec3 ile korunmuş mu?" diye statik
+-- denetim yapar.
+local VALID_SHOT_TYPES = Validate.shotTypeSet(Config.SHOT)
+
+local function sanitizeShotType(value)
+	return Validate.shotType(value, VALID_SHOT_TYPES)
+end
+
+local function sanitizeFoot(value)
+	return Validate.foot(value)
+end
+
+-- NaN/inf istemciden gelebilir: math.min(1, NaN) = NaN olduğu için clamp yetmez,
+-- sonlu sayı denetimi şart. Bu yüzden güç/nişan Validate.clamp'ten geçer (önce
+-- sonluluk, sonra aralık); topa yazılacak hız ise aşağıdaki isFiniteVec3'ten.
+-- Topa YAZILACAK hız için son savunma hattı: Ballistics.solveLaunch ulaşılamayan
+-- hedefte NaN üretebilir ve NaN hız simülasyonun geri kalanını kalıcı bozar.
+local function isFiniteVec3(v)
+	return Validate.vec3(v)
+end
+
 kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
 	local now = os.clock()
 	if lastKickAt[player] and now - lastKickAt[player] < 0.35 then
@@ -513,9 +635,9 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 
 	lastKickAt[player] = now
 
-	local c = math.max(0, math.min(1, tonumber(charge) or 0.5))
-	local targetZ = math.max(-3.3, math.min(3.3, tonumber(aimZ) or 0))
-	local targetY = math.max(0.2, math.min(2.3, tonumber(aimY) or 1.0))
+	local c = Validate.clamp(charge, 0, 1, 0.5)
+	local targetZ = Validate.clamp(aimZ, -3.3, 3.3, 0)
+	local targetY = Validate.clamp(aimY, 0.2, 2.3, 1.0)
 
 	-- Nişan hatası: yanal sapma (deterministik RNG)
 	local errRad = rng:normal(0, math.rad(Config.BALL_CONTROL.aimErrorDeg))
@@ -536,8 +658,8 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 		ballLateral = Vec3.dot(toBall, right),
 		ballForward = Vec3.dot(toBall, forward),
 		charge = c,
-		shotType = shotType or "instep",
-		foot = foot or nil, -- nil -> otomatik (topun yanına göre)
+		shotType = sanitizeShotType(shotType),
+		foot = sanitizeFoot(foot), -- nil -> otomatik (topun yanına göre)
 	})
 
 	local speed = control:speedForCharge(c)
@@ -555,7 +677,15 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 	}
 end)
 
+-- Sıfırlama da hız sınırlı: herhangi bir istemci bunu spamleyip maçı
+-- kilitleyemesin (sunucu otoritesi).
+local lastResetAt = 0
 resetRemote.OnServerEvent:Connect(function()
+	local now = os.clock()
+	if now - lastResetAt < 0.5 then
+		return
+	end
+	lastResetAt = now
 	resetBall()
 end)
 
@@ -624,7 +754,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 		local shot = striker:step(frameDt, sim.ball, keeper)
 		if shot and shot.type == "shoot" then
 			local velocity = Ballistics.solveLaunch(sim.ball.pos, shot.target, shot.speed, Config.GRAVITY)
-			if velocity then
+			if isFiniteVec3(velocity) then
 				sim.ball.vel = velocity
 				sim.ball.spin = Ballistics.shotSpin(shot.speed, shot.target.y, shot.target.z)
 				sim.ball.mode = "air"
@@ -645,7 +775,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 				shot.speed,
 				Config.GRAVITY
 			)
-			if velocity then
+			if isFiniteVec3(velocity) then
 				getControl(player):kick(sim.ball, nil, velocity, shot.spin, sim.time)
 				stats.kicks = stats.kicks + 1
 			end
@@ -729,7 +859,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 			local from = sim.ball.pos
 			local target = Vec3.new(P.halfLength, rng:range(0.5, 2.0), rng:symmetric(2.8))
 			local velocity = Ballistics.solveLaunch(from, target, rng:range(18, 26), Config.GRAVITY)
-			if velocity then
+			if isFiniteVec3(velocity) then
 				sim.ball:setState(from, velocity, Vec3.new(0, rng:symmetric(30), 0))
 			end
 		end
@@ -2373,6 +2503,118 @@ function Rng:clone()
 end
 
 return Rng
+]=] },
+	["shared/Core/Validate"] = { class = "ModuleScript", source = [=[
+--[[
+	Validate — doğrulanmamış girdiyi güvenle kullanılabilir değere indirger.
+
+	NEDEN AYRI MODÜL
+	  İstemci `Kick` remote'una HERHANGİ bir şey gönderebilir: nil, tablo, string,
+	  NaN, 1e300. Sunucu bu değeri fiziğe ve animasyona verdiği için doğrulanmamış
+	  girdi iki şekilde patlar:
+	    1) Sessiz bozulma  — `math.min(1, NaN) == NaN`; NaN hız topun tüm durumunu
+	       zehirler ve bir daha düzelmez (top görünmez olur, skor donar).
+	    2) Handler çökmesi — `KickAnim`, `Config.SHOT[shotType]` ve `"hip" .. foot`
+	       kullanır; shotType = "labels" (gerçek bir tablo!) -> `sp.power = nil` ->
+	       aritmetik hatası; foot = {} -> concatenate hatası.
+	  Bu yüzden politika: BEYAZ LİSTE + VARSAYILANA DÜŞ. Girdi geçersizse istek
+	  reddedilmez, geçerli varsayılanla uygulanır (şut sessizce yutulmaz).
+
+	  Mantık burada, SimLoop'un içinde değil: böylece birim olarak test edilebilir
+	  ve hem sunucu hem istemci aynı kuralları paylaşır. Roblox API'si KULLANMAZ.
+]]
+
+local Validate = {}
+
+-- Config.SHOT.types boş/eksik olsa bile her zaman bir geçerli vuruş türü kalsın
+Validate.DEFAULT_SHOT_TYPE = "instep"
+
+-- Fizikte anlamı olan en büyük büyüklük (m/s, m). Üstü ölçüm hatası/istismardır.
+Validate.MAX_COMPONENT = 1e6
+
+--- Sayı mı, sonlu mu? Değilse `fallback`.
+-- tonumber("12") = 12 olduğu için sayısal string'ler de kabul edilir (istemci
+-- JSON benzeri bir katmandan string gönderebilir); tonumber({}) = nil -> fallback.
+function Validate.number(value, fallback)
+	local n = tonumber(value)
+	if n == nil then
+		return fallback
+	end
+	if n ~= n or n == math.huge or n == -math.huge then
+		return fallback
+	end
+	return n
+end
+
+--- Sayıya çevir, sonra [lo, hi] aralığına kıstır; geçersizse `fallback`.
+-- Sıra önemli: önce sonluluk, sonra clamp. `math.min(1, NaN)` NaN döndürdüğü
+-- için clamp tek başına koruma sağlamaz.
+function Validate.clamp(value, lo, hi, fallback)
+	local n = Validate.number(value, fallback)
+	if n < lo then
+		return lo
+	end
+	if n > hi then
+		return hi
+	end
+	return n
+end
+
+--- Vec3 benzeri `{x, y, z}` gerçekten sonlu bir vektör mü?
+-- Bu denetim topa YAZILACAK hız için son savunma hattıdır: balistik çözücü
+-- (Ballistics.solveLaunch) hedefe ulaşılamadığında NaN üretebilir ve NaN hız
+-- simülasyonun geri kalanını kalıcı olarak bozar.
+function Validate.vec3(v)
+	if type(v) ~= "table" then
+		return false
+	end
+	-- BİLEREK ipairs değil, indis ile: `ipairs({v.x, v.y, v.z})` z nil olduğunda
+	-- 2 elemanda durur ve eksik bileşenli tablo "geçerli" sayılırdı.
+	local components = { v.x, v.y, v.z }
+	for i = 1, 3 do
+		local component = components[i]
+		if type(component) ~= "number" or component ~= component or math.abs(component) > Validate.MAX_COMPONENT then
+			return false
+		end
+	end
+	return true
+end
+
+--- Config.SHOT'tan geçerli vuruş türü kümesi (set) üretir.
+function Validate.shotTypeSet(shotConfig)
+	local allowed = {}
+	local types = shotConfig and shotConfig.types
+	if type(types) == "table" then
+		for _, typeName in ipairs(types) do
+			if type(typeName) == "string" then
+				allowed[typeName] = true
+			end
+		end
+	end
+	allowed[Validate.DEFAULT_SHOT_TYPE] = true
+	return allowed
+end
+
+--- Vuruş türü beyaz listede mi? Değilse varsayılan tür.
+-- `allowed` verilmezse Validate.shotTypeSet(nil) ile üretilen tek üyeli küme kullanılır.
+function Validate.shotType(value, allowed)
+	local set = allowed or Validate.shotTypeSet(nil)
+	if type(value) == "string" and set[value] then
+		return value
+	end
+	return Validate.DEFAULT_SHOT_TYPE
+end
+
+--- Ayak: yalnızca "L" veya "R". Diğer her şey nil -> animasyon otomatik seçer.
+-- nil dönüşü bir hata değil, KickAnim'in topun yanına göre ayak seçtiği sözleşmedir.
+function Validate.foot(value)
+	if value == "L" or value == "R" then
+		return value
+	end
+	return nil
+end
+
+return Validate
 ]=] },
 	["shared/Core/Vec3"] = { class = "ModuleScript", source = [=[
 --[[
@@ -4312,9 +4554,28 @@ local LINE_Y = 0.03 -- çim üstünden yükseklik (stud)
 -- Lua 5.3: math.atan(y, x) | Luau: math.atan2(y, x)
 local atan2 = math.atan2 or math.atan
 
+-- Kardeş adları BENZERSİZ olmalı. Roblox'ta aynı ada sahip iki çocuk yasaldir ama
+-- `FindFirstChild("PenaltyAreaSide")` hangisini döndürdüğü belirsizdir ve Studio
+-- ağacı okunmaz olur. Çizgilerde simetrik çiftler (kuzey/güney ceza sahası kenarı,
+-- iki kale tarafı) aynı mantıksal adı paylaşır; çakışmaya sayaç eklenir.
+-- build() eski FootballPitch'i yok ettiği için adlar her kurulumda deterministiktir.
+local function uniqueName(parent, name)
+	if parent == nil then
+		return name
+	end
+	if parent:FindFirstChild(name) == nil then
+		return name
+	end
+	local suffix = 2
+	while parent:FindFirstChild(name .. tostring(suffix)) ~= nil do
+		suffix = suffix + 1
+	end
+	return name .. tostring(suffix)
+end
+
 local function makePart(parent, name, sizeStuds, cframe, color, material, opts)
 	local p = Instance.new("Part")
-	p.Name = name
+	p.Name = uniqueName(parent, name)
 	p.Anchored = true
 	p.Size = sizeStuds
 	p.CFrame = cframe
@@ -4460,22 +4721,25 @@ local function buildLines(root, opts)
 
 	-- Ceza sahası / kale sahası / penaltı noktası
 	local sides = opts.half and { 1 } or { -1, 1 }
+	-- Tam sahada iki taraf da aynı çizgileri çizer; ada taraf etiketi (East/West)
+	-- ve simetri etiketi (North/South) eklenir ki hiçbir kardeş adı çakışmasın.
 	for _, side in ipairs(sides) do
 		local gl = side * HL
 		local paX = gl - side * P.penaltyAreaLength
 		local gaX = gl - side * P.goalAreaLength
+		local sideTag = side > 0 and "East" or "West"
 
-		drawLine(folder, "PenaltyAreaLine", paX, -P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
-		drawLine(folder, "PenaltyAreaSide", gl, -P.penaltyAreaHalfWidth, paX, -P.penaltyAreaHalfWidth)
-		drawLine(folder, "PenaltyAreaSide", gl, P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaLine" .. sideTag, paX, -P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaSide" .. sideTag .. "North", gl, -P.penaltyAreaHalfWidth, paX, -P.penaltyAreaHalfWidth)
+		drawLine(folder, "PenaltyAreaSide" .. sideTag .. "South", gl, P.penaltyAreaHalfWidth, paX, P.penaltyAreaHalfWidth)
 
-		drawLine(folder, "GoalAreaLine", gaX, -P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
-		drawLine(folder, "GoalAreaSide", gl, -P.goalAreaHalfWidth, gaX, -P.goalAreaHalfWidth)
-		drawLine(folder, "GoalAreaSide", gl, P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaLine" .. sideTag, gaX, -P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaSide" .. sideTag .. "North", gl, -P.goalAreaHalfWidth, gaX, -P.goalAreaHalfWidth)
+		drawLine(folder, "GoalAreaSide" .. sideTag .. "South", gl, P.goalAreaHalfWidth, gaX, P.goalAreaHalfWidth)
 
 		makePart(
 			folder,
-			"PenaltySpot",
+			"PenaltySpot" .. sideTag,
 			Vector3.new(0.22 * S, 0.05, 0.22 * S),
 			CFrame.new(v3(gl - side * P.penaltySpot, LINE_Y / S, 0)),
 			Color3.fromRGB(246, 250, 252),
@@ -4497,10 +4761,12 @@ local function buildGoal(parent, side)
 	goalFolder.Parent = parent
 
 	-- Yan direkler (silindir ekseni X'tir; dikey yapmak için Z'de 90°)
+	-- Adlar bilerek Kuzey/Güney: iki direk aynı mantıksal parçanın simetriği, ama
+	-- aynı Name ile FindFirstChild belirsizleşirdi (bkz. uniqueName).
 	for _, sz in ipairs({ -1, 1 }) do
 		makePart(
 			goalFolder,
-			"Post",
+			"Post" .. (sz < 0 and "North" or "South"),
 			Vector3.new(P.goalHeight * S, postDia * S, postDia * S),
 			CFrame.new(v3(gl, P.goalHeight / 2, sz * P.goalHalfWidth)) * CFrame.Angles(0, 0, math.rad(90)),
 			frameColor,
@@ -4538,7 +4804,7 @@ local function buildGoal(parent, side)
 	for _, sz in ipairs({ -1, 1 }) do
 		makePart(
 			goalFolder,
-			"NetSide",
+			"NetSide" .. (sz < 0 and "North" or "South"),
 			Vector3.new(P.goalDepth * S, P.goalHeight * S, 0.05 * S),
 			CFrame.new(((gl + backX) / 2) * S, (P.goalHeight / 2) * S, sz * P.goalHalfWidth * S),
 			netColor,
@@ -4748,19 +5014,11 @@ function SceneBuilder.updateStrikerModel(strikerModel, pose, pos, yaw, studsPerM
 end
 
 --[[ Kaleci görselinin dünya uzayındaki el noktaları (hata ayıklama/teşhis). ]]
-function SceneBuilder.keeperHands(keeperModel, pose, pos, studsPerMeter)
-	if not keeperModel then
-		return nil
-	end
-	local s = studsPerMeter or S
-	local solved = SceneBuilder.updateKeeperModel(keeperModel, pose, pos, s)
-	local out = {}
-	for _, side in ipairs({ "L", "R" }) do
-		local hand, forward, right, up = Rig.toWorld(solved.pos["hand" .. side], Vec3.new(pos.x * s, 0, pos.z * s), keeperYaw(keeperModel.side or 1), s)
-		out[side] = hand
-	end
-	return out
-end
+-- NOT: Burada daha önce `SceneBuilder.keeperHands` vardı: eldiven dünya
+-- konumlarını döndürüyordu ama HİÇBİR yerden çağrılmıyordu ve her çağrıda tüm
+-- kaleci pozunu yeniden çözüyordu (updateKeeperModel zaten aynı işi yapıyor ve
+-- eldivenleri yerleştiriyor). Ölü dışa aktarım olarak kaldırıldı; eldiven
+-- konumları PartRig + updateKeeperModel üzerinden tek yoldan gelir.
 
 return SceneBuilder
 ]=] },

@@ -97,6 +97,20 @@ const result = spawnSync(bin, [bundlePath], {
   maxBuffer: 64 * 1024 * 1024,
 });
 
+// Sessiz başarı YOK: Lua VM bulunamazsa/test hiç çalışmazsa kırmızı dön.
+// (Aksi halde `npm test` bağımlılıklar kurulu değilken boş çıktıyla 0 döner
+// ve her şey yolundaymış gibi görünür.)
+if (result.error) {
+  const reason = result.error.code === "ENOENT" ? "bulunamadi" : String(result.error.message || result.error);
+  console.error("[ORTAM] Lua VM (fengari) " + reason + ": " + bin);
+  console.error("[ORTAM] Bagimliliklari kurun:  npm install");
+  process.exit(1);
+}
+if (!traceMode && !animMode && !(result.stdout || "").trim() && !(result.stderr || "").trim()) {
+  console.error("[ORTAM] Test kosucusu hic cikti uretmedi (VM calismadi?). Bagimliliklari kurun:  npm install");
+  process.exit(1);
+}
+
 if (animMode) {
   if (result.status !== 0) {
     if (result.stderr) process.stderr.write(result.stderr);

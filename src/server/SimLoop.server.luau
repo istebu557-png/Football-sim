@@ -24,6 +24,7 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local Vec3 = require(Shared.Core.Vec3)
+local Validate = require(Shared.Core.Validate)
 local Rng = require(Shared.Core.Rng)
 local Ballistics = require(Shared.Core.Ballistics)
 local Sim = require(Shared.Sim)
@@ -37,9 +38,12 @@ local KickAnim = require(Shared.Anim.KickAnim)
 local HumanoidPose = require(Shared.Anim.HumanoidPose)
 
 local S = Config.STUDS_PER_METER
-local R = Config.BALL.radius
 local P = Config.PITCH
 local ANIM = Config.ANIM or {}
+
+-- Lua 5.3: math.atan(y, x) | Luau: math.atan2(y, x). Ikisi de desteklensin
+-- (Vec3 ve SceneBuilder ile ayni desen; test kosucusu Lua 5.3 kullanir).
+local atan2 = math.atan2 or math.atan
 
 -- ---------------------------------------------------------------- 1) Sahne
 local scene = SceneBuilder.build({ half = true, goalSide = 1 })
@@ -100,7 +104,7 @@ local function playerState(player)
 		return nil
 	end
 	local look = hrp.CFrame.LookVector
-	local facing = math.atan2(look.Z, look.X) -- +x'ten +z'ye (Vec3.yaw ile aynı)
+	local facing = atan2(look.Z, look.X) -- +x'ten +z'ye (Vec3.yaw ile aynı)
 	return BallControl.playerState(
 		Vector3.new(hrp.Position.X, 0, hrp.Position.Z),
 		hrp.AssemblyLinearVelocity,
@@ -133,6 +137,35 @@ resetBall()
 local lastKickAt = {}
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 
+--[[ İstemciden gelen HER değer güvenilmezdir (exploiter arbitrary tablo/string
+	gönderebilir). KickAnim, `SHOT[shotType]` ve `"hip" .. foot` kullandığı için
+	doğrulanmamış girdi sunucu handler'ını patlatır (ör. shotType = "labels" ->
+	sp.power = nil -> aritmetik hatası; foot = {} -> concatenate hatası).
+	Bu yüzden beyaz liste: listede yoksa varsayılana düş. ]]
+-- Politika: BEYAZ LİSTE + VARSAYILANA DÜŞ. Kurallar src/shared/Core/Validate.luau
+-- içinde (birim testli); burada yalnızca bu dosyanın kullandığı kısa adlar bağlanır.
+-- Çağrı yerleri (isFiniteVec3/sanitize*) bilerek aynı isimde kalır:
+-- tools/verify.js "her launch bölgesi isFiniteVec3 ile korunmuş mu?" diye statik
+-- denetim yapar.
+local VALID_SHOT_TYPES = Validate.shotTypeSet(Config.SHOT)
+
+local function sanitizeShotType(value)
+	return Validate.shotType(value, VALID_SHOT_TYPES)
+end
+
+local function sanitizeFoot(value)
+	return Validate.foot(value)
+end
+
+-- NaN/inf istemciden gelebilir: math.min(1, NaN) = NaN olduğu için clamp yetmez,
+-- sonlu sayı denetimi şart. Bu yüzden güç/nişan Validate.clamp'ten geçer (önce
+-- sonluluk, sonra aralık); topa yazılacak hız ise aşağıdaki isFiniteVec3'ten.
+-- Topa YAZILACAK hız için son savunma hattı: Ballistics.solveLaunch ulaşılamayan
+-- hedefte NaN üretebilir ve NaN hız simülasyonun geri kalanını kalıcı bozar.
+local function isFiniteVec3(v)
+	return Validate.vec3(v)
+end
+
 kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
 	local now = os.clock()
 	if lastKickAt[player] and now - lastKickAt[player] < 0.35 then
@@ -154,9 +187,9 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 
 	lastKickAt[player] = now
 
-	local c = math.max(0, math.min(1, tonumber(charge) or 0.5))
-	local targetZ = math.max(-3.3, math.min(3.3, tonumber(aimZ) or 0))
-	local targetY = math.max(0.2, math.min(2.3, tonumber(aimY) or 1.0))
+	local c = Validate.clamp(charge, 0, 1, 0.5)
+	local targetZ = Validate.clamp(aimZ, -3.3, 3.3, 0)
+	local targetY = Validate.clamp(aimY, 0.2, 2.3, 1.0)
 
 	-- Nişan hatası: yanal sapma (deterministik RNG)
 	local errRad = rng:normal(0, math.rad(Config.BALL_CONTROL.aimErrorDeg))
@@ -177,8 +210,8 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 		ballLateral = Vec3.dot(toBall, right),
 		ballForward = Vec3.dot(toBall, forward),
 		charge = c,
-		shotType = shotType or "instep",
-		foot = foot or nil, -- nil -> otomatik (topun yanına göre)
+		shotType = sanitizeShotType(shotType),
+		foot = sanitizeFoot(foot), -- nil -> otomatik (topun yanına göre)
 	})
 
 	local speed = control:speedForCharge(c)
@@ -196,7 +229,15 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 	}
 end)
 
+-- Sıfırlama da hız sınırlı: herhangi bir istemci bunu spamleyip maçı
+-- kilitleyemesin (sunucu otoritesi).
+local lastResetAt = 0
 resetRemote.OnServerEvent:Connect(function()
+	local now = os.clock()
+	if now - lastResetAt < 0.5 then
+		return
+	end
+	lastResetAt = now
 	resetBall()
 end)
 
@@ -265,7 +306,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 		local shot = striker:step(frameDt, sim.ball, keeper)
 		if shot and shot.type == "shoot" then
 			local velocity = Ballistics.solveLaunch(sim.ball.pos, shot.target, shot.speed, Config.GRAVITY)
-			if velocity then
+			if isFiniteVec3(velocity) then
 				sim.ball.vel = velocity
 				sim.ball.spin = Ballistics.shotSpin(shot.speed, shot.target.y, shot.target.z)
 				sim.ball.mode = "air"
@@ -286,7 +327,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 				shot.speed,
 				Config.GRAVITY
 			)
-			if velocity then
+			if isFiniteVec3(velocity) then
 				getControl(player):kick(sim.ball, nil, velocity, shot.spin, sim.time)
 				stats.kicks = stats.kicks + 1
 			end
@@ -370,7 +411,7 @@ RunService.Heartbeat:Connect(function(frameDt)
 			local from = sim.ball.pos
 			local target = Vec3.new(P.halfLength, rng:range(0.5, 2.0), rng:symmetric(2.8))
 			local velocity = Ballistics.solveLaunch(from, target, rng:range(18, 26), Config.GRAVITY)
-			if velocity then
+			if isFiniteVec3(velocity) then
 				sim.ball:setState(from, velocity, Vec3.new(0, rng:symmetric(30), 0))
 			end
 		end
