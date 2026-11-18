@@ -28,6 +28,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
 local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
@@ -74,14 +75,36 @@ end
 
 -- ---------------------------------------------------------------- karakter
 local character, hrp
+local humanoid
 local function bindCharacter(char)
 	character = char
 	hrp = char:WaitForChild("HumanoidRootPart", 10)
+	humanoid = char:WaitForChild("Humanoid", 10)
 end
 if player.Character then
 	bindCharacter(player.Character)
 end
 player.CharacterAdded:Connect(bindCharacter)
+
+-- Jump'i devre dışı bırak / geri yükle (Space şut için kullanılır)
+local jumpConn
+local function setJumpEnabled(enabled)
+	if humanoid then
+		humanoid.Jump = enabled
+	end
+	if jumpConn then
+		jumpConn:Disconnect()
+		jumpConn = nil
+	end
+	if not enabled then
+		-- Space basıldığında karakterin zıplamasını engelle
+		jumpConn = humanoid.StateChanged:Connect(function(_, newState)
+			if newState == Enum.HumanoidStateType.Jumping then
+				humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+			end
+		end)
+	end
+end
 
 -- -------------------------------------------------------------------- top
 local serverBall = Workspace:WaitForChild("MatchBall", 30)
@@ -259,16 +282,6 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		cycleShotType()
 	elseif input.KeyCode == Enum.KeyCode.F then
 		toggleFoot()
-	end
-end)
-
-UserInputService.InputEnded:Connect(function(input, processed)
-	if input.KeyCode == Enum.KeyCode.Space and charging then
-		charging = false
-		barBack.Visible = false
-		fireKick()
-		charge = 0
-		barFill.Size = UDim2.new(0, 0, 1, 0)
 	end
 end)
 
@@ -1512,7 +1525,7 @@ function PartRig.apply(model, pose, origin, yaw, studsPerMeter)
 				if Vec3.length(dir) < 1e-6 then
 					part.CFrame = CFrame.new(mid.x, mid.y, mid.z)
 				else
-					part.CFrame = CFrame.new(mid.x, mid.y, mid.z, b.x, b.y, b.z)
+					part.CFrame = CFrame.new(Vector3.new(mid.x, mid.y, mid.z), Vector3.new(b.x, b.y, b.z))
 				end
 			end
 		end
