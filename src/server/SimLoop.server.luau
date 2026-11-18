@@ -36,6 +36,7 @@ local Striker = require(Shared.Player.Striker)
 local KeeperAnim = require(Shared.Anim.KeeperAnim)
 local KickAnim = require(Shared.Anim.KickAnim)
 local HumanoidPose = require(Shared.Anim.HumanoidPose)
+local PlayerPose = require(Shared.Anim.PlayerPose)
 
 local S = Config.STUDS_PER_METER
 local P = Config.PITCH
@@ -135,6 +136,10 @@ resetBall()
 -- --------------------------------------------------------------- 5) Şut
 -- Oyuncunun şutu: tuşa basıldığında pozisyon seçilir, top TEMAS anında ayrılır.
 local lastKickAt = {}
+-- Oyuncu karakterlerinin prosedürel animasyon saati (yürüyüş fazı + nefes).
+-- Şut beklemede OLMASA da karakter pozlanır: eskiden yalnızca şut sırasında
+-- poz yazıldığı için oyuncu "animasyonlar çalışmıyor" diyordu.
+local playerAnimClock = 0
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 
 --[[ İstemciden gelen HER değer güvenilmezdir (exploiter arbitrary tablo/string
@@ -249,13 +254,14 @@ local keeperAnim = nil
 local keeperAnimT = 0
 local keeperDiveRef = nil
 
-local READY_POSE = KeeperAnim.new({ dz = 0, height = 0.5 }):sample(0.15).pose
+local keeperClock = 0 -- kaleci idle animasyonunun saati (nefes/salinim)
 
--- Kaleci pozu: yeni dalış hedefi geldiğinde animasyon başlar; süresi bittiğinde READY_POSE'a döner.
+-- Kaleci pozu: yeni dalış hedefi geldiğinde animasyon başlar; süresi bittiğinde canlı idle pozuna (nefes + salınım) döner.
 local function keeperPose(dt)
 	if not ANIM.keeperPoseEnabled then
 		return nil
 	end
+	keeperClock = keeperClock + dt
 	local target = keeper.diveTarget
 	if target and (not keeperAnim or keeperAnimT >= keeperAnim:duration()) then
 		keeperAnim = KeeperAnim.new({
@@ -272,7 +278,8 @@ local function keeperPose(dt)
 		end
 		keeperAnim = nil
 	end
-	return READY_POSE
+	-- Dalış yoksa heykel değil: nefes + ağırlık salınımı (sahne canlı kalır)
+	return KeeperAnim.idle(keeperClock)
 end
 
 local function broadcastState(event, extra)
@@ -337,10 +344,27 @@ RunService.Heartbeat:Connect(function(frameDt)
 			HumanoidPose.apply(character, shot.kick:sample(shot.t).pose)
 		end
 		if shot.t >= shot.kick:duration() then
-			if character and ANIM.poseHumanoid then
-				HumanoidPose.clear(character)
-			end
+			-- clear() çağırmıyoruz: vuruş biter bitmez eklemleri kimliğe
+			-- sıfırlamak karakteri bir kare "donmuş" gösteriyordu. Bunun
+			-- yerine 3b'deki yürüyüş pozu devralır (geçiş sürekli).
 			pending[player] = nil
+		end
+	end
+
+	-- 3b) Oyuncu karakterleri: yürüyüş/duruş pozu her karede yazılır.
+	-- Şut bekleyen oyuncunun pozu yukarıdaki döngüde KickAnim'den gelir;
+	-- burada yalnızca şut beklemeyenler pozlanır (KickAnim önceliği korunsun).
+	if ANIM.poseHumanoid then
+		playerAnimClock = playerAnimClock + frameDt
+		for _, player in ipairs(Players:GetPlayers()) do
+			if not pending[player] then
+				local character = player.Character
+				if character and HumanoidPose.supported(character) then
+					local state = playerState(player)
+					local speed = (state and state.speed) or 0 -- m/s (yatay)
+					HumanoidPose.apply(character, PlayerPose.walk(playerAnimClock, speed))
+				end
+			end
 		end
 	end
 

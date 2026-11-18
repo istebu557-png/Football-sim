@@ -41,7 +41,7 @@ const BUILD = path.join(ROOT, ".build");
 const PREVIEW = path.join(ROOT, "preview");
 const FENGARI = path.join(ROOT, "node_modules", ".bin", "fengari");
 
-const MIN_TESTS = 123; // spec.luau'daki en az kontrol sayısı (geriye gitmesin)
+const MIN_TESTS = 132; // spec.luau'daki en az kontrol sayısı (geriye gitmesin)
 
 /* ------------------------------------------------------------------ yardımcılar */
 

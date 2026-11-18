@@ -1044,6 +1044,12 @@ function Mock.install()
 	}
 
 	-- Yerel oyuncu (istemci tarafı) + sunucuya "katılmış" oyuncu listesi
+	-- Gerçek R15 karakterdeki Motor6D adları (HumanoidPose.JOINTS ile aynı küme)
+	local R15_JOINTS = {
+		"Waist", "Neck", "LeftHip", "LeftKnee", "LeftAnkle", "RightHip", "RightKnee",
+		"RightAnkle", "LeftShoulder", "LeftElbow", "RightShoulder", "RightElbow",
+	}
+
 	local function makeCharacter(spawnPosition)
 		local model = makeClass("Model", "Tester")
 		local hrp = makeClass("Part", "HumanoidRootPart")
@@ -1055,7 +1061,16 @@ function Mock.install()
 		head.CFrame = makeCFrame((spawnPosition or makeVector3(0, 3, 0)) + makeVector3(0, 1.5, 0))
 		head.Parent = model
 		local humanoid = makeClass("Humanoid", "Humanoid")
+		humanoid.RigType = "R15" -- HumanoidPose yalnız Motor6D adlarına bakar
 		humanoid.Parent = model
+		-- R15 eklem Motor6D'leri: gerçek karakterde HumanoidPose bunların
+		-- Transform'una yazar. Mock'ta yoksa poz kodu sessizce atlanır ve
+		-- "animasyon gerçekten uygulanıyor mu" test edilemez.
+		for _, jointName in ipairs(R15_JOINTS) do
+			local motor = makeClass("Motor6D", jointName)
+			motor.Transform = makeCFrame()
+			motor.Parent = model
+		end
 		model.PrimaryPart = hrp
 		return model, hrp, humanoid
 	end

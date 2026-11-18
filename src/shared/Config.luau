@@ -129,7 +129,7 @@ Config.BALL_CONTROL = {
 	bodyRadius = 0.42, -- oyuncu gövde yarıçapı (m)
 	bodyHeight = 1.80,
 	controlRadius = 1.45, -- bu mesafede top "ayakta" sayılır
-	kickReach = 1.70, -- şut atılabilen maksimum mesafe
+	kickReach = 2.00, -- şut atılabilen maksimum mesafe (1.70 ilk deneyimde çok dardı)
 	dribbleReach = 1.60,
 
 	-- Dokunuş (touch) modeli: gerçekte top sürerken saniyede ~3 dokunuş olur

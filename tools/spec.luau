@@ -25,6 +25,7 @@ local Ease = __load("shared/Anim/Ease")
 local KickAnim = __load("shared/Anim/KickAnim")
 local KeeperAnim = __load("shared/Anim/KeeperAnim")
 local WalkCycle = __load("shared/Anim/WalkCycle")
+local PlayerPose = __load("shared/Anim/PlayerPose")
 local Striker = __load("shared/Player/Striker")
 
 local passed, failed = 0, 0
@@ -1044,6 +1045,72 @@ test("sahne agacinda cift kardes adi yok (FindFirstChild belirsiz degil)", funct
 		"tam sahada ayni adi paylasan kardesler: " .. table.concat(dupFull, ", "))
 end)
 
+-- Doğma noktası topa UZAKSA oyuncu ilk SPACE'te hiçbir şey olmaz ve bunu
+-- "şut çekemiyorum" diye yaşar: sunucu menzil kapısı (kickReach) sessizce
+-- reddeder. Bu test sahnenin kendisini bağlar: spawn, topun vuruş menzili
+-- içinde olmalı. (Eskiden 11.5 m gerideydi.)
+--[[ Kurulu sahnede doğma noktası ile top arasındaki yatay mesafe (metre).
+     Dönüş: mesafe, menzil (kickReach), PitchSpawn, MatchBall ]]
+local function spawnToBallMeters(mockEnv)
+	local cfg = require(mockEnv.replicatedStorage.Shared.Config)
+	local pitch = mockEnv.workspace:FindFirstChild("FootballPitch")
+	local spawn = pitch and pitch:FindFirstChild("PitchSpawn")
+	local ball = mockEnv.workspace:FindFirstChild("MatchBall")
+	if not spawn or not ball then
+		return nil, cfg.BALL_CONTROL.kickReach, spawn, ball
+	end
+	local dx = spawn.Position.X - ball.Position.X
+	local dz = spawn.Position.Z - ball.Position.Z
+	local distM = math.sqrt(dx * dx + dz * dz) / cfg.STUDS_PER_METER
+	return distM, cfg.BALL_CONTROL.kickReach, spawn, ball
+end
+
+local function freshInstalledScene(opts)
+	local mockEnv = RobloxMock.install()
+	local ok, err = pcall(function()
+		local chunk = assert(load(INSTALLER_SRC, "@FootballSim_Install"))
+		chunk()
+	end)
+	check(ok, "kurulum calismadi: " .. tostring(err))
+	if opts and opts.half == false then
+		local sb = require(mockEnv.replicatedStorage.Shared.World.SceneBuilder)
+		sb.build({ half = false })
+	end
+	return mockEnv
+end
+
+test("dogma noktasi topun vurus menzili icinde (ilk SPACE bos gecmemeli)", function()
+	local mockEnv = freshInstalledScene({})
+	local distM, reach, spawn, ball = spawnToBallMeters(mockEnv)
+	check(spawn ~= nil, "yarim sahada PitchSpawn yok")
+	check(ball ~= nil, "sahnede MatchBall yok")
+	check(distM ~= nil, "spawn-top mesafesi olculemedi")
+	check(distM <= reach, string.format(
+		"dogma noktasi toptan %.2f m geride, vurus menzili %.2f m: oyuncu ilk SPACE'te sut atamaz (sessiz red)",
+		distM, reach))
+	check(distM >= 0.35, string.format(
+		"dogma noktasi topun icinde (%.2f m): karakter dogar dogmaz topa carpip onu surer", distM))
+	-- Menzil kapısı gerçekten bu mesafede açık mı? (geometri ile kural aynı şeyi mi söylüyor)
+	local SPM = Config.STUDS_PER_METER
+	local bx, bz = ball.Position.X / SPM, ball.Position.Z / SPM
+	local sx, sz = spawn.Position.X / SPM, spawn.Position.Z / SPM
+	local simBall = Ball.new(Config, Vec3.new(bx, Config.BALL.radius, bz))
+	simBall:setState(Vec3.new(bx, Config.BALL.radius, bz), Vec3.new(0, 0, 0), Vec3.new(0, 0, 0))
+	local bc = BallControl.new(Config)
+	local spawner = { pos = Vec3.new(sx, 0, sz), vel = Vec3.new(0, 0, 0), facing = 0, speed = 0 }
+	check(bc:canKick(simBall, spawner), string.format(
+		"dogma noktasindaki oyuncu icin canKick false (%.2f m): menzil kapisi hala kapali", distM))
+end)
+
+test("tam sahada da dogma noktasi menzil icinde", function()
+	local mockEnv = freshInstalledScene({ half = false })
+	local distM, reach, spawn = spawnToBallMeters(mockEnv)
+	check(spawn ~= nil, "tam sahada PitchSpawn yok")
+	check(distM ~= nil, "tam sahada spawn-top mesafesi olculemedi")
+	check(distM <= reach, string.format(
+		"tam sahada dogma noktasi toptan %.2f m uzak (menzil %.2f m)", distM, reach))
+end)
+
 test("kaleci dalisi topun gittigi yana yatar (ters yonelmez)", function()
 	-- Dogu kalesi (side=+1): kaleci -X'e bakar, saga uzanmasi dünya -Z demektir.
 	-- Top dünya +Z tarafina gidiyorsa kaleci SOLUNA (yerel -dz) uzanmali ve
@@ -1312,6 +1379,117 @@ test("kosu dongusu: hiz artinca adim buyur, durunca sifirlanir", function()
 	check(math.abs(fast.hipL.x) > math.abs(slow.hipL.x), "hizli kosuda adim buyumeli")
 	local idle = WalkCycle.sample(0.0, 0.25, 1.0)
 	check(idle.hipL == nil or math.abs(idle.hipL.x) < 1e-9, "dururken bacak salinimi olmamali")
+end)
+
+-- Kullanıcı şikayeti: "oyuncu animasyonları çalışmıyor". Sebebi iki taneydi:
+-- (1) şut hiç tetiklenmiyordu (bkz. menzil testleri), (2) karakter yalnızca şut
+-- beklerken pozlanıyordu; yürürken/dururken kimse poz yazmıyordu. PlayerPose bu
+-- boşluğu kapatır ve zamanı adım fazına çevirir (ayaklar yerde kaymaz).
+test("PlayerPose: yuruyus fazini mesafeden uretir, tam adimda faz sifirlanir", function()
+	near(PlayerPose.phaseAt(0, 5.0), 0, 1e-12, "t=0 faz 0")
+	near(PlayerPose.phaseAt(WalkCycle.STRIDE / 5.0, 5.0), 0, 1e-9,
+		"bir tam adim atilinca faz yeniden 0 olmali")
+	near(PlayerPose.phaseAt(0.5 * WalkCycle.STRIDE / 5.0, 5.0), 0.5, 1e-9, "yarim adimda faz 0.5")
+	check(PlayerPose.phaseAt(-3, 5.0) >= 0 and PlayerPose.phaseAt(-3, 5.0) < 1,
+		"negatif zamanda faz 0..1 araliginda kalmali")
+	check(PlayerPose.phaseAt(1.7, 0) == 0, "dururken faz ilerlememeli")
+end)
+
+test("PlayerPose: hiz artinca adim buyur, dururken atletik durusa duser", function()
+	near(PlayerPose.strideAmp(0), 0, 1e-12, "dururken genlik 0")
+	near(PlayerPose.strideAmp(PlayerPose.FULL_STRIDE_SPEED), 1, 1e-12, "tam hizda genlik 1")
+	check(PlayerPose.strideAmp(99) == 1, "genlik 1'in ustune cikmamali")
+	check(PlayerPose.strideAmp(-4) == PlayerPose.strideAmp(4), "geri geri kosmak genligi degistirmemeli")
+
+	local slow = PlayerPose.walk(0.4, 2.0)
+	local fast = PlayerPose.walk(0.4, 7.0)
+	check(slow ~= nil and fast ~= nil, "walk poz uretmedi")
+	check(math.abs(fast.hipL.x) > math.abs(slow.hipL.x),
+		"hizli kosuda kalca salinimi buyumeli")
+
+	local stand = PlayerPose.walk(0.4, 0)
+	check(stand.hipL == nil or math.abs(stand.hipL.x) < 1e-9,
+		"dururken bacak salinimi olmamali")
+	-- Duruş heykel gibi olmasın: dizler kırık, gövde alçalmış, nefes alıyor
+	check(stand.kneeL ~= nil and stand.kneeL.x > 0.15,
+		"durusta dizler kirik degil (heykel gibi): " .. tostring(stand.kneeL and stand.kneeL.x))
+	check(stand.rootOffset.y < -0.02,
+		"durusta govde alçalmali: " .. tostring(stand.rootOffset.y))
+	local breathA = PlayerPose.ready(0.0, 0)
+	local breathB = PlayerPose.ready(1.0, 0)
+	check(math.abs(breathA.rootOffset.y - breathB.rootOffset.y) > 1e-6,
+		"durus zamanla degismiyor: nefes animasyonu yok")
+	-- ready(hızlı) -> yürüyüşe düşmeli (çağıran tarafın hızı kıyaslaması gerekmez)
+	check(PlayerPose.ready(0.4, 7.0).hipL ~= nil and math.abs(PlayerPose.ready(0.4, 7.0).hipL.x) > 1e-9,
+		"ready hizli hareketi yuruyuse devretmedi")
+end)
+
+test("PlayerPose pozlari R15 karakterine uygulanabiliyor (animasyon gercekten yaziliyor)", function()
+	local mockEnv = RobloxMock.install() -- global Instance/CFrame/Workspace'ü kurar
+	local joints = { "Waist", "Neck", "LeftHip", "LeftKnee", "LeftAnkle", "RightHip", "RightKnee",
+		"RightAnkle", "LeftShoulder", "LeftElbow", "RightShoulder", "RightElbow" }
+	local model = Instance.new("Model")
+	model.Name = "R15Tester"
+	model.Parent = mockEnv.workspace
+	for _, name in ipairs(joints) do
+		local motor = Instance.new("Motor6D")
+		motor.Name = name
+		motor.Transform = CFrame.new()
+		motor.Parent = model
+	end
+	local HP = __load("shared/Anim/HumanoidPose")
+	check(HP.supported(model), "R15 karakter desteklenmiyor sayildi")
+
+	local leftHip = model:FindFirstChild("LeftHip")
+	check(HP.apply(model, PlayerPose.walk(0.10, 6.0)), "apply false döndü")
+	local first = { leftHip.Transform:GetComponents() }
+	HP.apply(model, PlayerPose.walk(0.35, 6.0))
+	local second = { leftHip.Transform:GetComponents() }
+	check(#first == 12 and #second == 12, "Motor6D.Transform yazilmadi (GetComponents 12 deger vermedi)")
+	local moved = 0
+	for i = 1, 12 do
+		if math.abs(first[i] - second[i]) > 1e-9 then
+			moved = moved + 1
+		end
+	end
+	check(moved > 0, "iki farkli karede kalca pozu ayni: animasyon ilerlemiyor")
+	-- Üçüncü kare de farklı olmalı: tek seferlik bir sıçrama değil, döngü.
+	HP.apply(model, PlayerPose.walk(0.60, 6.0))
+	local third = { leftHip.Transform:GetComponents() }
+	local moved2 = 0
+	for i = 1, 12 do
+		if math.abs(third[i] - second[i]) > 1e-9 then
+			moved2 = moved2 + 1
+		end
+	end
+	check(moved2 > 0, "ucuncu karede kalca pozu degismedi: dongu donmuyor")
+
+	HP.clear(model)
+	local cleared = model:FindFirstChild("LeftKnee").Transform
+	check(cleared ~= nil, "clear sonrasi Transform okunamiyor")
+end)
+
+test("kaleci bosta heykel degil: nefes + salinim animasyonu var", function()
+	local a = KeeperAnim.idle(0.0)
+	local b = KeeperAnim.idle(1.3)
+	local c = KeeperAnim.idle(2.6)
+	check(a ~= nil and a.rootOffset ~= nil, "idle poz uretmedi")
+	check(a.root ~= nil and a.spine ~= nil and a.hipL ~= nil, "idle poz eklem icermiyor")
+	check(math.abs(a.rootOffset.y - b.rootOffset.y) > 1e-9, "nefes animasyonu yok (y sabit)")
+	check(math.abs(a.rootOffset.x - b.rootOffset.x) > 1e-9, "agirlik salinimi yok (x sabit)")
+	check(math.abs(b.rootOffset.x - c.rootOffset.x) > 1e-12, "salinim devam etmiyor")
+	-- İki farklı zamanda üretilen pozlar birebir aynı olmamalı
+	local sameAll = true
+	for _, key in ipairs({ "x", "y", "z" }) do
+		if math.abs(a.rootOffset[key] - b.rootOffset[key]) > 1e-12 then
+			sameAll = false
+		end
+	end
+	check(not sameAll, "idle poz zamandan bagimsiz: kaleci donmus gorunur")
+	-- Dalış animasyonundan ayrışmalı (idle = hazır, dalış = yana uzanma)
+	local dive = KeeperAnim.new({ dz = 1.2, height = 0.5 }):sample(0.45).pose
+	check(math.abs(dive.spine.y - a.spine.y) > 1e-6 or math.abs(dive.rootOffset.x - a.rootOffset.x) > 1e-6,
+		"idle ile dalis pozu ayirt edilemiyor")
 end)
 
 test("poz karisimi: blend uclarda dogru sonuc verir", function()
@@ -1831,6 +2009,7 @@ test("T vurus turunu, F ayagi degistiriyor ve HUD metni guncelleniyor", function
 	check(fourth:find("ayak: R", 1, true) ~= nil, "F ikinci kez ayagi R yapmadi: " .. tostring(fourth))
 end)
 
+
 test("SPACE basili tutunca guc bari doluyor", function()
 	local bar = clientWorld.hud:FindFirstChild("ChargeBar")
 	local fill = bar:FindFirstChild("ChargeFill")
@@ -1956,6 +2135,167 @@ local function makeAttacker(world, name, behindMeters)
 	return player, hrp
 end
 
+-- Sunucu, top menzil dışındayken şutu SESSİZCE reddediyordu (kickRemote
+-- handler'ında 4 farklı erken return, hiçbiri istemciye bir şey söylemiyor).
+-- "şut çekemiyorum" şikayetinin asıl sebebi bu: oyuncu nedenini göremiyor.
+-- Artık HUD aynı kapıyı okuyup mesafeyi ve ne yapması gerektiğini yazıyor.
+test("top menzil disindayken HUD oyuncuya nedeni soyluyor (sessiz red yok)", function()
+	-- Yerel oyuncunun karakterini toptan 9 m uzağa ışınla (menzil 2 m).
+	-- BallView kendi karakterini (Players.LocalPlayer) ölçer, başkasını değil.
+	local bp = clientWorld.ball.Position
+	local farPos = Vector3.new(bp.X - 9 * STUDS_PER_METER, bp.Y, bp.Z)
+	clientWorld.hrp.CFrame = CFrame.lookAt(farPos, farPos + Vector3.new(10, 0, 0))
+	clientWorld.hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	local steps = stepWorld(clientWorld, 0.25)
+	check(#steps.errors == 0, "kare dongusu hata verdi: " .. table.concat(steps.errors, " | "))
+	local far = hintText(clientWorld)
+	check(type(far) == "string", "Hint metni yok")
+	check(far:find("TOPA YAKLA", 1, true) ~= nil,
+		"menzil disinda uyari yok: " .. tostring(far))
+	check(far:find("menzil", 1, true) ~= nil,
+		"uyarida vurus menzili yazmiyor: " .. tostring(far))
+	check(far:find("ayak: R", 1, true) ~= nil,
+		"uyari vurus turu/ayak bilgisini sildi: " .. tostring(far))
+	local farLabel = clientWorld.hud:FindFirstChild("Hint")
+	check(farLabel.TextColor3 ~= nil, "Hint rengi okunamiyor")
+
+	-- Topa yaklaşınca uyarı kaybolur, normal ipucu geri gelir
+	placePlayerAtBall(clientWorld, 0.8)
+	local back = stepWorld(clientWorld, 0.25)
+	check(#back.errors == 0, "yaklasirken hata: " .. table.concat(back.errors, " | "))
+	local near = hintText(clientWorld)
+	check(near:find("TOPA YAKLA", 1, true) == nil,
+		"menzile girince uyari kalkmadi: " .. tostring(near))
+	check(near:find("SPACE", 1, true) ~= nil, "normal ipucu geri gelmedi: " .. tostring(near))
+end)
+
+-- "Oyuncu animasyonları çalışmıyor" şikayetinin uctan uca kanıtı: karakterin
+-- R15 eklemleri gerçekten yazılıyor mu? (Mock karakter artık Motor6D içeriyor;
+-- içermese bu test boşuna yeşil kalırdı.)
+local function jointComponents(character, jointName)
+	local motor = character and character:FindFirstChild(jointName)
+	if not motor then
+		return nil
+	end
+	return { motor.Transform:GetComponents() }
+end
+
+local function jointsMoved(a, b)
+	if not a or not b then
+		return -1
+	end
+	local moved = 0
+	for i = 1, 12 do
+		if math.abs(a[i] - b[i]) > 1e-9 then
+			moved = moved + 1
+		end
+	end
+	return moved
+end
+
+test("oyuncu animasyonu uctan uca: durusta, kosarken ve sута eklemler yaziliyor", function()
+	local animWorld = bootWorld({ striker = false })
+	check(animWorld.installOk and animWorld.serverOk and animWorld.clientOk,
+		"dunya kurulamadi: " .. tostring(animWorld.installErr or animWorld.serverErr or animWorld.clientErr))
+	local character = animWorld.hrp and animWorld.hrp.Parent
+	check(character ~= nil, "karakter yok")
+	check(character:FindFirstChild("LeftHip") ~= nil,
+		"karakterde R15 LeftHip eklemi yok (mock Motor6D uretmiyor)")
+
+	placePlayerAtBall(animWorld, 0.8)
+	local warm = stepWorld(animWorld, 0.35)
+	check(#warm.errors == 0, "isinma kareleri hata verdi: " .. table.concat(warm.errors, " | "))
+
+	-- 1) Dururken: eklem kimlikte kalmamali (atletik bekleyiş + nefes)
+	local standHip = jointComponents(character, "LeftHip")
+	local standKnee = jointComponents(character, "LeftKnee")
+	check(standHip ~= nil and standKnee ~= nil, "durusta eklem Transform okunamiyor")
+	check(jointsMoved(standKnee, { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }) > 0,
+		"durusta diz kimlikte: karakter heykel gibi donmus")
+	local laterKnee = jointComponents(character, "LeftKnee")
+	stepWorld(animWorld, 0.6)
+	laterKnee = jointComponents(character, "LeftKnee")
+	check(jointsMoved(standKnee, laterKnee) > 0,
+		"durusta poz zamanla degismiyor: nefes animasyonu yok")
+
+	-- 2) Yürürken: koşu döngüsü ilerlemeli
+	placePlayerAtBall(animWorld, 0.8)
+	animWorld.hrp.AssemblyLinearVelocity = Vector3.new(16, 0, 0)
+	local walkStart = jointComponents(character, "LeftHip")
+	stepWorld(animWorld, 0.30)
+	local walkMid = jointComponents(character, "LeftHip")
+	stepWorld(animWorld, 0.30)
+	local walkEnd = jointComponents(character, "LeftHip")
+	check(jointsMoved(walkStart, walkMid) > 0, "kosarken kalca pozu degismedi (adim 1)")
+	check(jointsMoved(walkMid, walkEnd) > 0, "kosarken kalca pozu degismedi (adim 2)")
+	animWorld.hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+
+	-- 3) Şut sırasında: KickAnim pozu yazılmalı (bacak savrulur)
+	local beforeKick = jointComponents(character, "RightHip")
+	local kickFrames = stepWorld(animWorld, 0.2)
+	check(#kickFrames.errors == 0, "sut oncesi karelerde hata: " .. table.concat(kickFrames.errors, " | "))
+	animWorld.mock.pressKey("Space")
+	stepWorld(animWorld, 0.95) -- CHARGE_TIME 0.9 s
+	animWorld.mock.releaseKey("Space")
+	local duringKick = jointComponents(character, "RightHip")
+	local shotFrames = stepWorld(animWorld, 0.30)
+	check(#shotFrames.errors == 0, "sut kareleri hata verdi: " .. table.concat(shotFrames.errors, " | "))
+	check(shotFrames.launches >= 1,
+		"menzil icindeki oyuncunun sutu topu firlatmadi (launches=" .. tostring(shotFrames.launches) .. ")")
+	check(jointsMoved(beforeKick, duringKick) > 0,
+		"sut sirasinda kalca eklemi yazilmadi: KickAnim pozu karaktere uygulanmiyor")
+
+	-- 4) Vuruş bittikten sonra karakter donup kalmamali (yürüyüş pozu devralır)
+	local afterShot = jointComponents(character, "RightHip")
+	stepWorld(animWorld, 1.2)
+	local settledPose = jointComponents(character, "RightHip")
+	check(jointsMoved(afterShot, settledPose) > 0,
+		"sut bittikten sonra karakter dondu: yuruyus/durus pozu devralmadi")
+end)
+
+-- Aynı davranışın SUNUCU tarafı kanıtı: istemci script'i hiç çalışmazken
+-- (yani başka bir oyuncunun/sunucunun gördüğü hâliyle) karakter yine
+-- animasyonlu olmalı. Eskiden sunucu pozu yalnızca şut beklerken yazıyordu;
+-- bu yüzden diğer oyuncular için karakter yürürken donmuş görünüyordu.
+test("sunucu tek basina da oyuncuyu animasyonlu tutuyor (istemci kapali)", function()
+	local serverOnly = bootWorld({ striker = false, client = false })
+	check(serverOnly.installOk and serverOnly.serverOk,
+		"dunya kurulamadi: " .. tostring(serverOnly.installErr or serverOnly.serverErr))
+
+	-- Sunucunun poz yazdığı karakterler Players:GetPlayers() içindekilerdir;
+	-- bu yüzden OYUNA KATILMIŞ bir oyuncu kullanılır (LocalTester katılmaz).
+	local joined = serverOnly.mock.makePlayer("ServerViewer", Vector3.new(0, 3, 0))
+	local character = joined.Character
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	check(hrp ~= nil, "katilan oyuncunun karakter koku yok")
+	check(character:FindFirstChild("RightHip") ~= nil, "R15 RightHip eklemi yok")
+
+	local bp = serverOnly.ball.Position
+	local pos = Vector3.new(bp.X - 0.8 * STUDS_PER_METER, bp.Y, bp.Z)
+	hrp.CFrame = CFrame.lookAt(pos, pos + Vector3.new(10, 0, 0))
+	hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+
+	local warm = stepWorld(serverOnly, 0.3)
+	check(#warm.errors == 0, "isinma kareleri hata verdi: " .. table.concat(warm.errors, " | "))
+
+	local stand = jointComponents(character, "RightHip")
+	local standKnee = jointComponents(character, "RightKnee")
+	check(stand ~= nil and standKnee ~= nil, "sunucu pozu okunamiyor")
+	check(jointsMoved(standKnee, { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }) > 0,
+		"sunucu durusta pozu yazmiyor: karakter kimlikte (heykel)")
+
+	hrp.AssemblyLinearVelocity = Vector3.new(16, 0, 0)
+	stepWorld(serverOnly, 0.30)
+	local walkA = jointComponents(character, "RightHip")
+	stepWorld(serverOnly, 0.30)
+	local walkB = jointComponents(character, "RightHip")
+	hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	check(jointsMoved(stand, walkA) > 0,
+		"sunucu kosu pozunu yazmiyor (durus -> kosu degismedi)")
+	check(jointsMoved(walkA, walkB) > 0,
+		"sunucu kosu dongusunu ilerletmiyor (iki kare ayni)")
+end)
+
 local e2e = nil
 
 test("istemcinin sutu sunucuda topu gercekten firlatiyor", function()
@@ -2002,7 +2342,7 @@ end)
 test("uzaktaki oyuncunun sut istegi reddediliyor (sunucu otoritesi)", function()
 	local settled = settleBall(e2e)
 	check(#settled.errors == 0, "top sifirlanirken hata: " .. table.concat(settled.errors, " | "))
-	local attacker = makeAttacker(e2e, "FarAway", 20) -- kickReach = 1.70 m
+	local attacker = makeAttacker(e2e, "FarAway", 20) -- kickReach = 2.00 m: 20 m hala cok uzak
 	local before = e2e.ball.Position
 	e2e.kickRemote.OnServerEvent:Fire(attacker, 1.0, 0.0, 1.0, "instep", "R")
 	local res = stepWorld(e2e, 1.0)
