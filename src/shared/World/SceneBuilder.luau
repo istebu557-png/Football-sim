@@ -680,8 +680,10 @@ function SceneBuilder.build(opts)
 	end
 	setupLighting()
 
-	-- Doğma noktası: yarım sahada topun gerisinde (animasyonlar görüş alanında)
-	local spawnX = half and (P.halfLength * 0.18) or 0
+	-- Doğma noktası: topun BİR ADIM gerisinde. Eskiden 11.5 m uzaktaydı: oyuncu
+	-- "şut çekemiyorum" diyordu çünkü menzil kapısı (kickReach) sessizce reddediyordu.
+	-- Artık ilk SPACE'te şut atılabilir; kale ve kaleci zaten kadrajda.
+	local spawnX = half and (ballStart.X / S - 1.5) or 0
 	buildSpawn(root, spawnX)
 
 	ball.CFrame = CFrame.new(ballStart)

@@ -36,6 +36,7 @@ local Striker = require(Shared.Player.Striker)
 local KeeperAnim = require(Shared.Anim.KeeperAnim)
 local KickAnim = require(Shared.Anim.KickAnim)
 local HumanoidPose = require(Shared.Anim.HumanoidPose)
+local PlayerPose = require(Shared.Anim.PlayerPose)
 
 local S = Config.STUDS_PER_METER
 local P = Config.PITCH
@@ -135,7 +136,25 @@ resetBall()
 -- --------------------------------------------------------------- 5) Şut
 -- Oyuncunun şutu: tuşa basıldığında pozisyon seçilir, top TEMAS anında ayrılır.
 local lastKickAt = {}
+-- Oyuncu karakterlerinin prosedürel animasyon saati (yürüyüş fazı + nefes).
+-- Şut beklemede OLMASA da karakter pozlanır: eskiden yalnızca şut sırasında
+-- poz yazıldığı için oyuncu "animasyonlar çalışmıyor" diyordu.
+local playerAnimClock = 0
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
+-- ŞUT TAMPONU: menzil dışındaki istek çöpe gitmez, kısa bir pencere bekletilir.
+-- player -> { at = sim.time, charge, aimZ, aimY, shotType, foot }
+local buffered = {}
+
+-- broadcastState aşağıda tanımlı; Lua'da local'ler bildirim noktasından sonra
+-- görünür olduğu için burada ileri bildirim gerekiyor.
+local broadcastState
+
+--[[ Şut geri bildirimi: istemcide HUD satırında kısa süre gösterilir. ]]
+local function shotHint(kind, text)
+	if broadcastState then
+		broadcastState(kind, nil, text)
+	end
+end
 
 --[[ İstemciden gelen HER değer güvenilmezdir (exploiter arbitrary tablo/string
 	gönderebilir). KickAnim, `SHOT[shotType]` ve `"hip" .. foot` kullandığı için
@@ -166,38 +185,43 @@ local function isFiniteVec3(v)
 	return Validate.vec3(v)
 end
 
-kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
-	local now = os.clock()
-	if lastKickAt[player] and now - lastKickAt[player] < 0.35 then
-		return
-	end
+local KICK_COOLDOWN = 0.35 -- iki şut isteği arasındaki en az süre (s)
 
+--[[ Şut isteğini uygular (hem doğrudan istek hem tampondaki istek aynı yoldan
+     geçer; böylece iki yol farklı kural uygulayamaz).
+     Dönüş: true -> vuruş başladı | false, neden, tamponlanabilir mi ]]
+local function startShot(player, charge, aimZ, aimY, shotType, foot)
+	local BC = Config.BALL_CONTROL
 	local state = playerState(player)
 	if not state then
-		return
+		return false, "karakter hazır değil (HumanoidRootPart yok)", false
 	end
 
 	local control = getControl(player)
-	if not control:canKick(sim.ball, state) then
-		return
+	if not control:canKick(sim.ball, state, sim.time) then
+		if sim.ball.pos.y > BC.kickHeight then
+			return false, string.format(
+				"top %.2f m havada — vuruş yüksekliği %.1f m", sim.ball.pos.y, BC.kickHeight), false
+		end
+		local gap = control:shotGap(sim.ball, state)
+		return false, string.format(
+			"top %.1f m önde — şut menzili %.1f m", gap, BC.possessionReach), gap <= BC.shotBufferReach
 	end
 	if pending[player] then
-		return
+		return false, "şut zaten sürüyor", false
 	end
-
-	lastKickAt[player] = now
 
 	local c = Validate.clamp(charge, 0, 1, 0.5)
 	local targetZ = Validate.clamp(aimZ, -3.3, 3.3, 0)
 	local targetY = Validate.clamp(aimY, 0.2, 2.3, 1.0)
 
 	-- Nişan hatası: yanal sapma (deterministik RNG)
-	local errRad = rng:normal(0, math.rad(Config.BALL_CONTROL.aimErrorDeg))
+	local errRad = rng:normal(0, math.rad(BC.aimErrorDeg))
 	local dx = P.halfLength - sim.ball.pos.x
 	local dz = targetZ - sim.ball.pos.z
 	local dist = math.sqrt(dx * dx + dz * dz)
 	if dist < 0.5 then
-		return
+		return false, "kale ağzındasın: nişan düzlemi kurulamıyor", false
 	end
 	local lateral = math.tan(errRad) * dist
 
@@ -227,6 +251,39 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 		spin = Vec3.add(spin, Vec3.new(0, rng:symmetric(10), 0)),
 		fired = false,
 	}
+	return true
+end
+
+kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
+	local now = os.clock()
+	if lastKickAt[player] and now - lastKickAt[player] < KICK_COOLDOWN then
+		shotHint("shotRejected", string.format("şut çıkmadı: çok hızlı, iki şut arası en az %.2f s", KICK_COOLDOWN))
+		return
+	end
+
+	local ok, reason, bufferable = startShot(player, charge, aimZ, aimY, shotType, foot)
+	if ok then
+		lastKickAt[player] = now
+		return
+	end
+
+	-- SESSİZ RED YOK. Top sürüşten öndeyse istek TAMPONA alınır: oyuncu topa
+	-- yetişince şut kendiliğinden çıkar (bkz. adım 3a). Tampon menzili de
+	-- aşıldıysa oyuncuya nedeni yazılır.
+	if bufferable and not buffered[player] then
+		buffered[player] = {
+			at = sim.time,
+			charge = charge,
+			aimZ = aimZ,
+			aimY = aimY,
+			shotType = shotType,
+			foot = foot,
+		}
+		lastKickAt[player] = now
+		shotHint("shotBuffered", "şut bekliyor → topa yetiş, kendiliğinden çıkacak (" .. reason .. ")")
+	else
+		shotHint("shotRejected", "şut çıkmadı: " .. reason)
+	end
 end)
 
 -- Sıfırlama da hız sınırlı: herhangi bir istemci bunu spamleyip maçı
@@ -249,13 +306,14 @@ local keeperAnim = nil
 local keeperAnimT = 0
 local keeperDiveRef = nil
 
-local READY_POSE = KeeperAnim.new({ dz = 0, height = 0.5 }):sample(0.15).pose
+local keeperClock = 0 -- kaleci idle animasyonunun saati (nefes/salinim)
 
--- Kaleci pozu: yeni dalış hedefi geldiğinde animasyon başlar; süresi bittiğinde READY_POSE'a döner.
+-- Kaleci pozu: yeni dalış hedefi geldiğinde animasyon başlar; süresi bittiğinde canlı idle pozuna (nefes + salınım) döner.
 local function keeperPose(dt)
 	if not ANIM.keeperPoseEnabled then
 		return nil
 	end
+	keeperClock = keeperClock + dt
 	local target = keeper.diveTarget
 	if target and (not keeperAnim or keeperAnimT >= keeperAnim:duration()) then
 		keeperAnim = KeeperAnim.new({
@@ -272,10 +330,13 @@ local function keeperPose(dt)
 		end
 		keeperAnim = nil
 	end
-	return READY_POSE
+	-- Dalış yoksa heykel değil: nefes + ağırlık salınımı (sahne canlı kalır)
+	return KeeperAnim.idle(keeperClock)
 end
 
-local function broadcastState(event, extra)
+-- hint: şut isteğinin NEDEN çıkmadığı (ya da tampondan çıktığı) oyuncuya
+-- yazıyla bildirilir. Sessiz red, "şut çekemiyorum" şikayetinin köküydü.
+function broadcastState(event, extra, hint)
 	if stateRemote then
 		stateRemote:FireAllClients({
 			goals = stats.goals,
@@ -285,6 +346,7 @@ local function broadcastState(event, extra)
 			sag = goalNet.sag,
 			event = event,
 			extra = extra,
+			hint = hint,
 		})
 	end
 end
@@ -315,6 +377,18 @@ RunService.Heartbeat:Connect(function(frameDt)
 		SceneBuilder.updateStrikerModel(strikerModel, striker:pose(), striker.pos, striker.facing, S)
 	end
 
+	-- 3a) Tampondaki şut istekleri: oyuncu topa yetişince şut kendiliğinden çıkar
+	for player, req in pairs(buffered) do
+		if sim.time - req.at > Config.BALL_CONTROL.shotBufferTime then
+			buffered[player] = nil
+			shotHint("shotExpired", string.format(
+				"şut kaçtı: %.2f s içinde topa yetişemedin", Config.BALL_CONTROL.shotBufferTime))
+		elseif startShot(player, req.charge, req.aimZ, req.aimY, req.shotType, req.foot) then
+			buffered[player] = nil
+			shotHint("shotFired", "şut çıktı (topa yetişildi)")
+		end
+	end
+
 	-- 3) Oyuncuların şutları: savurma tamamlanınca top ayrılır
 	for player, shot in pairs(pending) do
 		shot.t = shot.t + frameDt
@@ -337,10 +411,27 @@ RunService.Heartbeat:Connect(function(frameDt)
 			HumanoidPose.apply(character, shot.kick:sample(shot.t).pose)
 		end
 		if shot.t >= shot.kick:duration() then
-			if character and ANIM.poseHumanoid then
-				HumanoidPose.clear(character)
-			end
+			-- clear() çağırmıyoruz: vuruş biter bitmez eklemleri kimliğe
+			-- sıfırlamak karakteri bir kare "donmuş" gösteriyordu. Bunun
+			-- yerine 3b'deki yürüyüş pozu devralır (geçiş sürekli).
 			pending[player] = nil
+		end
+	end
+
+	-- 3b) Oyuncu karakterleri: yürüyüş/duruş pozu her karede yazılır.
+	-- Şut bekleyen oyuncunun pozu yukarıdaki döngüde KickAnim'den gelir;
+	-- burada yalnızca şut beklemeyenler pozlanır (KickAnim önceliği korunsun).
+	if ANIM.poseHumanoid then
+		playerAnimClock = playerAnimClock + frameDt
+		for _, player in ipairs(Players:GetPlayers()) do
+			if not pending[player] then
+				local character = player.Character
+				if character and HumanoidPose.supported(character) then
+					local state = playerState(player)
+					local speed = (state and state.speed) or 0 -- m/s (yatay)
+					HumanoidPose.apply(character, PlayerPose.walk(playerAnimClock, speed))
+				end
+			end
 		end
 	end
 
@@ -407,6 +498,7 @@ Players.PlayerRemoving:Connect(function(player)
 	controls[player] = nil
 	lastKickAt[player] = nil
 	pending[player] = nil
+	buffered[player] = nil
 end)
 
 -- Banner gerçegi soylesin: sutu kim atiyor?

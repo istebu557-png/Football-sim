@@ -134,13 +134,38 @@ function BallControl:update(ball, player, now)
 	return nil
 end
 
--- Şut atılabilir mi? (mesafe + yükseklik)
-function BallControl:canKick(ball, player)
-	local BC = self.cfg.BALL_CONTROL
+--[[ Oyuncu ile top arasındaki yatay mesafe (m). Şut kapısı, tampon kararı ve
+     istemci uyarısı aynı sayıyı kullanır ki kural ile geri bildirim ayrışmasın. ]]
+function BallControl:shotGap(ball, player)
 	local dx = ball.pos.x - player.pos.x
 	local dz = ball.pos.z - player.pos.z
-	local dist = math.sqrt(dx * dx + dz * dz)
-	return dist <= BC.kickReach and ball.pos.y <= BC.kickHeight
+	return math.sqrt(dx * dx + dz * dz)
+end
+
+--[[ Şut atılabilir mi? (mesafe + yükseklik + SÜRÜŞ SAHİPLİĞİ)
+
+     İki yol:
+       1) top kickReach içindeyse -> her zaman geçerli
+       2) top az önce DOKUNULAN bir topsa (sahiplik) possessionReach'e kadar
+          geçerli. Top sürerken dokunuş topu ileri ittiği için mesafe
+          kickReach'i geçer; eskiden bu durumda şut SESSİZCE reddediliyordu
+          ("topa yaklaştığımda topu sürdüğüm için şut çekemiyorum").
+
+     `now` verilmezse sahiplik yolu hiç denenmez (birim testler katı kuralı
+     ölçebilsin diye). SimLoop her zaman sim.time ile çağırır. ]]
+function BallControl:canKick(ball, player, now)
+	local BC = self.cfg.BALL_CONTROL
+	if ball.pos.y > BC.kickHeight then
+		return false
+	end
+	local dist = self:shotGap(ball, player)
+	if dist <= BC.kickReach then
+		return true
+	end
+	if now == nil then
+		return false
+	end
+	return dist <= BC.possessionReach and (now - self.lastTouch) <= BC.possessionTime
 end
 
 -- Güç -> hız eşlemesi (0..1 -> minKickSpeed..maxKickSpeed)

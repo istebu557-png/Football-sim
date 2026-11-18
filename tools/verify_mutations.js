@@ -16,7 +16,7 @@
  *
  * Hız için her vaka yalnızca ilgili kapıyı koşar (VERIFY_ONLY). Tam kanıt:
  *   npm run verify          → 13/13 kapı
- *   npm run verify:mutate   → 26/26 kusur yakalandı
+ *   npm run verify:mutate   → 40/40 kusur yakalandı
  */
 "use strict";
 
@@ -38,6 +38,7 @@ const F = {
   spec: "tools/spec.luau",
   validate: "src/shared/Core/Validate.luau",
   scene: "src/shared/World/SceneBuilder.luau",
+  control: "src/shared/Player/BallControl.luau",
 };
 
 /** [ad, dosyalar, koşulan kapılar, kaynak → kusurlu kaynak] */
@@ -80,7 +81,7 @@ const CASES = [
   ["M15 iz: index.html olmayan alanı okuyor", [F.index], "iz",
     (s) => s.replace("shot.curve", "shot.eğrilikYok")],
   ["M16 belge: README test sayısı bayatladı", [F.readme], "belge",
-    (s) => s.replace("**123 kontrol**", "**99 kontrol**")],
+    (s) => s.replace("**137 kontrol**", "**99 kontrol**")],
   ["M17 önizleme: preview/anim.html silindi", [F.anim], "onizleme",
     () => null], // özel: dosya silinir (aşağıda DELETE olarak ele alınır)
   ["M18 bir spec kontrolü başarısız", [F.spec], "testler",
@@ -102,6 +103,48 @@ const CASES = [
     (s) => s.replace("return cam:ViewportPointToRay(loc.X, loc.Y)", "return cam:ViewportPointToRay(960, 540)")],
   ["M26 çift kardeş adı geri geldi (PostNorth/PostSouth → Post)", [F.scene], "testler",
     (s) => s.replace('"Post" .. (sz < 0 and "North" or "South")', '"Post"')],
+
+  // ---- "şut çekemiyorum / animasyonlar çalışmıyor" kusur sınıfı ----
+  // Bu dördü, kullanıcının yaşadığı gerçek arızaların geri gelmesi hâlinde
+  // doğrulayıcının KÖR kalmadığını kanıtlar: doğma noktası menzil dışına
+  // taşınırsa, menzil reddi yeniden sessizleşirse, oyuncu yalnızca şut
+  // sırasında pozlanırsa ya da kaleci boşta donarsa ilgili kapı düşmeli.
+  ["M27 doğma noktası yeniden menzil dışında (topun 11.5 m gerisi)", [F.scene], "testler",
+    (s) => s.replace("local spawnX = half and (ballStart.X / S - 1.5) or 0",
+      "local spawnX = half and (P.halfLength * 0.18) or 0")],
+  ["M28 menzil reddi yeniden sessiz (HUD uyarısı metni silindi)", [F.view], "testler",
+    (s) => s.replace('hint.Text = "TOPA YAKLAŞ → "', 'hint.Text = "" .. "--"')],
+  ["M29 oyuncu yalnızca şut sırasında pozlanıyor (yürüyüş pozu kapalı)", [F.loop], "testler",
+    (s) => s.replace("\tif ANIM.poseHumanoid then\n\t\tplayerAnimClock",
+      "\tif false then\n\t\tplayerAnimClock")],
+  ["M30 kaleci boşta donuyor (idle → sabit poz)", [F.loop], "testler",
+    (s) => s.replace("return KeeperAnim.idle(keeperClock)", "return KeeperAnim.idle(0)")],
+  ["M31 istemci tek-yazar kuralını bozuyor (şut sırasında o da poz yazıyor)", [F.view], "testler",
+    (s) => s.replace("\t\tif animClock >= serverKickUntil then", "\t\tif true then")],
+  ["M32 istemci hızı yalnız girdiden okuyor (koşu animasyonu donuyor)", [F.view], "testler",
+    (s) => s.replace("local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s",
+      "local speed = moveVel.Magnitude / S -- stud/s -> m/s")],
+  ["M33 duruş kimliğe döndü (atletik bekleyiş silindi → heykel)", ["src/shared/Anim/WalkCycle.luau"], "testler",
+    (s) => s.replace("pose.kneeL = Pose.joint(0.24 + 0.04 * breath, 0, 0)", "pose.kneeL = Pose.joint(0.02, 0, 0)")],
+
+  // ---- "topu sürdüğüm için şut çekemiyorum" kusur sınıfı ----
+  ["M34 sürüş sahipliği kaldırıldı (top öndeyken şut yine düşüyor)", [F.control], "testler",
+    (s) => s.replace("return dist <= BC.possessionReach and (now - self.lastTouch) <= BC.possessionTime",
+      "return false")],
+  ["M35 şut tamponu hiç doldurulmuyor (istek çöpe gidiyor)", [F.loop], "testler",
+    (s) => s.replace("if bufferable and not buffered[player] then", "if false and not buffered[player] then")],
+  ["M36 tampondaki şut hiç uygulanmıyor (oyuncu yetişse de çıkmıyor)", [F.loop], "testler",
+    (s) => s.replace("elseif startShot(player, req.charge, req.aimZ, req.aimY, req.shotType, req.foot) then",
+      "elseif false then")],
+  ["M37 sunucu hint alanını göndermiyor (istemci payload.hint okuyor)", [F.loop], "remote",
+    (s) => s.replace("hint = hint,", "")],
+  ["M38 istemci sunucunun nedenini HUD'a yazmıyor", [F.view], "testler",
+    (s) => s.replace('if type(payload.hint) == "string" and payload.hint ~= "" then', "if false then")],
+  ["M39 istemci uyarısı yine dar eşiği kullanıyor (sürüşte yanlış uyarı)", [F.view], "testler",
+    (s) => s.replace("if distM > POSSESSION_REACH then", "if distM > KICK_REACH then")],
+  ["M40 tampon penceresinin kapandığı nedeni boş gönderiliyor", [F.loop], "testler",
+    (s) => s.replace('"şut kaçtı: %.2f s içinde topa yetişemedin", Config.BALL_CONTROL.shotBufferTime))',
+      '"", Config.BALL_CONTROL.shotBufferTime))')],
 ];
 
 function read(rel) {

@@ -129,8 +129,23 @@ Config.BALL_CONTROL = {
 	bodyRadius = 0.42, -- oyuncu gövde yarıçapı (m)
 	bodyHeight = 1.80,
 	controlRadius = 1.45, -- bu mesafede top "ayakta" sayılır
-	kickReach = 1.70, -- şut atılabilen maksimum mesafe
+	kickReach = 2.00, -- şut atılabilen maksimum mesafe (1.70 ilk deneyimde çok dardı)
 	dribbleReach = 1.60,
+
+	--[[ SÜRÜŞ SAHİPLİĞİ: top sürerken dokunuş topu oyuncunun ÖNÜNE iter; bu
+	   yüzden "topa yaklaşınca şut çekemiyorum" oluyordu (5.5 m/s'de boşluk
+	   ~2.2 m > kickReach 2.00 m). Gerçek oyuncu bir adım öndeki topa da vurur:
+	   az önce dokunulmuş top, possessionReach içindeyse şut GEÇERLİDİR.
+	   Sahiplik yoksa (top uzaklardan yuvarlanıp geldi) şut tampona alınır. ]]
+	possessionReach = 3.20, -- az önce dokunulan top için şut menzili
+	possessionTime = 0.60, -- son dokunuşun üstünden bu kadar saniye geçtiyse sahiplik sürer
+
+	--[[ ŞUT TAMPONU (input buffering): SPACE bırakıldığında top menzil
+	   dışındaysa istek ÇÖPE GİTMEZ; oyuncu yetişene kadar kısa bir pencere
+	   bekletilir ve top menzile girince şut kendiliğinden çıkar. Pencere
+	   kapanırsa oyuncuya NEDENİ söylenir (sessiz red yok). ]]
+	shotBufferReach = 6.00, -- bu mesafeye kadar şut isteği tampona alınır
+	shotBufferTime = 0.75, -- tamponun açık kalma süresi (s)
 
 	-- Dokunuş (touch) modeli: gerçekte top sürerken saniyede ~3 dokunuş olur
 	touchInterval = 0.34,

@@ -79,6 +79,28 @@ function KeeperAnim:duration()
 	return KeeperAnim.DURATION
 end
 
+--[[ Dalış yokken kaleci HEYKEL gibi durmasın: yavaş nefes + ağırlık salınımı.
+     sample() gibi poz tablosu döndürür; sunucu her karede bunu uygular.
+     t = saniye (sunucu saati). ]]
+function KeeperAnim.idle(t)
+	local pose = Pose.new()
+	local breath = math.sin(t * 1.7) * 0.5 + 0.5 -- 0..1, ~3.7 s dönem
+	local sway = math.sin(t * 0.9) -- yana ağırlık aktarımı
+	pose.rootOffset = Vec3.new(sway * 0.06, -0.10 - 0.035 * breath, 0)
+	pose.root = Pose.joint(0, 0, sway * 0.05)
+	pose.spine = Pose.joint(0.16, sway * 0.06, 0)
+	pose.neck = Pose.joint(-0.10, -sway * 0.08, 0)
+	pose.shoulderL = Pose.joint(-1.10 - 0.06 * breath, 0, -0.35)
+	pose.shoulderR = Pose.joint(-1.10 - 0.06 * breath, 0, 0.35)
+	pose.elbowL = Pose.joint(-0.45, 0, 0)
+	pose.elbowR = Pose.joint(-0.45, 0, 0)
+	pose.hipL = Pose.joint(-0.35 - 0.06 * breath, 0, -0.10)
+	pose.hipR = Pose.joint(-0.35 - 0.06 * breath, 0, 0.10)
+	pose.kneeL = Pose.joint(0.70, 0, 0)
+	pose.kneeR = Pose.joint(0.70, 0, 0)
+	return pose
+end
+
 -- Uzanma eğrisi: daha yumuşak hazırlık, sert uzanma, yavaş toparlanma
 local function extensionAt(t)
 	return Ease.track(t, {

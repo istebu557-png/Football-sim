@@ -8,7 +8,7 @@
 	  4) Sahne kurulur, scriptler yerleşir. Play'e bas: SPACE ile şut çek.
 
 	Yeniden üretmek için: npm run install:build
-	Kaynak: src/ (27 modül)
+	Kaynak: src/ (28 modül)
 ]]
 
 local SOURCES = {
@@ -51,6 +51,46 @@ local PITCH = Config and Config.PITCH
 local HALF_LENGTH = PITCH and PITCH.halfLength or 52.5
 local GOAL_PLANE = HALF_LENGTH * S
 local CHARGE_TIME = (Config and Config.BALL_CONTROL and Config.BALL_CONTROL.chargeTime) or 0.9
+local BC = (Config and Config.BALL_CONTROL) or {}
+local KICK_REACH = BC.kickReach or 2.0
+-- Sunucuyla AYNI kural: top sürerken dokunuş topu öne ittiği için şut menzili
+-- "sahiplik" bandına kadar geniştir; o bandın dışında da istek tampona alınır.
+-- İstemci dar eşiği (kickReach) kullandığında oyuncu sürüşte yanlış uyarı görür.
+local POSSESSION_REACH = BC.possessionReach or 3.2
+local BUFFER_REACH = BC.shotBufferReach or 6.0
+
+-- ---------------------------------------------------------------- prosedürel oyuncu animasyonu
+-- Asset yok: karakterin R15 eklemleri her karede KODLA pozlanır. Bu istemcide
+-- çalışır çünkü kendi karakterinin ağ sahipliği istemcide. Sunucu yalnızca şut
+-- beklerken poz yazdığı için, yürüyüş/duruş burada oynatılır -> "animasyonlar
+-- çalışmıyor" şikayetinin kaynağı buydu.
+local Shared = ReplicatedStorage:WaitForChild("Shared", 20)
+local function loadSharedAnim(name)
+	if not Shared then
+		return nil
+	end
+	local animFolder = Shared:FindFirstChild("Anim")
+	local mod = animFolder and animFolder:FindFirstChild(name)
+	if not mod then
+		return nil
+	end
+	local ok, res = pcall(require, mod)
+	if ok and type(res) == "table" then
+		return res
+	end
+	return nil
+end
+local HumanoidPose = loadSharedAnim("HumanoidPose")
+local PlayerPose = loadSharedAnim("PlayerPose")
+local KickAnim = loadSharedAnim("KickAnim")
+local animClock = 0 -- sürekli saat: adım fazı ve nefes için
+-- Vuruş pozu için TEK YAZAR kuralı: sunucu şutu beklerken (pending) pozu o
+-- yazar; istemci aynı anda yazarsa iki kaynak aynı eklem için yarışır ve bacak
+-- titrer. İstemci yalnızca iki durumda kendi pozunu yazar:
+--   1) SPACE basılıyken (hazırlık pozu — anında geri bildirim)
+--   2) sunucunun vuruş penceresi kapandıktan sonra (yürüyüş/duruş devralır)
+local serverKickUntil = 0 -- animClock cinsinden: bu ana kadar pozu sunucu yazar
+local windupPose = nil -- basılı tutarken üretilecek hazırlık pozu
 
 -- ---------------------------------------------------------------- vuruş türü / ayak seçimi (profesyonel biomekanik)
 local SHOT = Config and Config.SHOT or { types = { "instep" }, labels = { instep = "Düz ayak" } }
@@ -58,7 +98,7 @@ local shotTypes = SHOT.types or { "instep" }
 local shotIndex = 1
 local currentFoot = "R" -- "L" | "R"
 
-local HINT_FORMAT = "SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (%s)   |   F → ayak değiştir   |   V → izleme kipi   |   R → topu sıfırla"
+local HINT_FORMAT = "WASD → topa yaklaş  ·  SPACE basılı tut → güç  ·  bırak → şut   |   T → vuruş türü (%s)   |   F → ayak   |   V → izleme   |   R → sıfırla"
 
 -- ÖNEMLİ: `hint` etiketi aşağıda (HUD bölümünde) oluşturuluyor. Lua'da bir
 -- local'in kapsamı bildiriminden SONRA başlar; bu yüzden `local hint` burada
@@ -71,10 +111,42 @@ local function shotLabel()
 	return (SHOT.labels and SHOT.labels[st] or st) .. "  |  ayak: " .. currentFoot
 end
 
+-- Sunucunun şutu SESSİZCE reddettiği durum (top menzil dışında) istemcide
+-- görünür olmalı: yoksa oyuncu "şut çekemiyorum" der. reachState her karede
+-- onFrame tarafından güncellenir; metin buradan okunur.
+local reachState = nil -- nil (menzilde) | sayı: topun metre cinsinden uzaklığı
+
+-- Sunucunun gönderdiği şut geri bildirimi (tampona alındı / reddedildi / çıktı).
+-- Sunucu otoriter taraf olduğu için asıl doğru bilgi budur; istemcideki mesafe
+-- ölçümü yalnızca anlık ipucudur.
+local serverHint = nil
+local serverHintUntil = 0
+-- Top katı menzil içindeyse HUD "ŞUT HAZIR" der: oyuncu SPACE'in boşa
+-- gitmeyeceğini görür (sahiplik bandında da şut çıkar, ama kesin olan bu).
+local inStrictReach = false
+
 local function updateHint()
-	if hint then
-		hint.Text = string.format(HINT_FORMAT, shotLabel())
+	if not hint then
+		return
 	end
+	if serverHint and animClock < serverHintUntil then
+		-- Sunucunun verdiği neden her şeyden önce gelir (otoriter bilgi).
+		hint.Text = serverHint .. "   |   " .. shotLabel()
+		hint.TextColor3 = Color3.fromRGB(255, 226, 140)
+		return
+	end
+	if reachState then
+		-- Uyarı, vuruş türü/ayak bilgisini SİLMEZ: oyuncu o anda T/F ile
+		-- hazırlık yapıyor olabilir, ikisi birlikte görünmeli.
+		local verdict = (reachState > BUFFER_REACH) and "şut çıkmaz" or "koşunca şut çıkar"
+		hint.Text = "TOPA YAKLAŞ → " .. string.format("%.1f", reachState)
+			.. " m önde  ·  menzil " .. string.format("%.1f", POSSESSION_REACH)
+			.. " m  ·  " .. verdict .. "  ·  WASD ile koş   |   " .. shotLabel()
+		hint.TextColor3 = Color3.fromRGB(255, 206, 110)
+		return
+	end
+	hint.Text = (inStrictReach and "ŞUT HAZIR  ·  " or "") .. string.format(HINT_FORMAT, shotLabel())
+	hint.TextColor3 = inStrictReach and Color3.fromRGB(150, 255, 190) or Color3.fromRGB(232, 240, 246)
 end
 
 local function cycleShotType()
@@ -117,11 +189,18 @@ local function setJumpEnabled(enabled)
 	end
 end
 
+local poseOk = false -- karakter R15 mi (pozlanabiliyor mu)?
+
 local function bindCharacter(char)
 	character = char
 	hrp = char:WaitForChild("HumanoidRootPart", 10)
 	humanoid = char:WaitForChild("Humanoid", 10)
 	setJumpEnabled(false)
+	poseOk = false
+	if HumanoidPose and PlayerPose then
+		local ok, supported = pcall(HumanoidPose.supported, char)
+		poseOk = ok and supported == true
+	end
 end
 if player.Character then
 	bindCharacter(player.Character)
@@ -257,6 +336,15 @@ if stateRemote then
 		elseif payload.event == "save" then
 			scoreLabel.TextColor3 = Color3.fromRGB(255, 210, 110)
 		end
+		-- Şut geri bildirimi: sunucu bir şutu reddetti/tampona aldı/çıkardı ise
+		-- NEDENİ HUD'da kısa süre gösterilir (sessiz red yok).
+		if type(payload.hint) == "string" and payload.hint ~= "" then
+			serverHint = payload.hint
+			serverHintUntil = animClock + 2.4
+			updateHint()
+		elseif payload.event == "shotFired" then
+			serverHint = nil
+		end
 	end)
 end
 
@@ -328,6 +416,12 @@ local function fireKick()
 		return
 	end
 	kickRemote:FireServer(charge, aim.Z / S, aim.Y / S, shotTypes[shotIndex] or "instep", currentFoot)
+	-- Sunucunun vuruş penceresi: CONTACT_TIME (0.24 s) + DURATION (0.62 s) +
+	-- bir kare payı. Bu aralıkta KickAnim pozunu sunucu yazar (temas anı topun
+	-- gerçek ayrılış anıyla birebir aynı kalsın diye); istemci karışmaz.
+	if KickAnim then
+		serverKickUntil = animClock + KickAnim.CONTACT_TIME + KickAnim.DURATION + 0.15
+	end
 end
 
 UserInputService.InputBegan:Connect(function(input, processed)
@@ -338,6 +432,15 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		charging = true
 		charge = 0
 		barBack.Visible = true
+		-- Hazırlık pozu: bacak hafifçe geriye, gövde döner. Güç barıyla birlikte
+		-- ANINDA görsel geri bildirim verir (sunucuya henüz bir şey gitmedi).
+		if KickAnim then
+			windupPose = KickAnim.new({
+				charge = 0.35,
+				foot = currentFoot,
+				shotType = shotTypes[shotIndex] or "instep",
+			}):sample(0.14).pose
+		end
 	elseif input.KeyCode == Enum.KeyCode.R and resetRemote then
 		resetRemote:FireServer()
 	elseif input.KeyCode == Enum.KeyCode.V then
@@ -361,6 +464,7 @@ UserInputService.InputEnded:Connect(function(input)
 	charging = false
 	barBack.Visible = false
 	barFill.Size = UDim2.new(0, 0, 1, 0)
+	windupPose = nil
 	fireKick()
 	charge = 0
 end)
@@ -382,6 +486,8 @@ local function resolveCamera()
 end
 
 local function onFrame(dt)
+	animClock = animClock + dt
+
 	-- Top: sunucu konumunu yumuşat + hız tahmini
 	local target = serverBall.Position
 	local k = 1 - math.exp(-16 * dt)
@@ -419,6 +525,43 @@ local function onFrame(dt)
 		end
 		camera.CFrame = CFrame.lookAt(camPos, camLook)
 		camera.CameraType = Enum.CameraType.Scriptable
+	end
+
+	-- Menzil geri bildirimi: sunucu top uzaktayken şutu sessizce reddeder;
+	-- istemci aynı kapıyı okuyup oyuncuya NEDENİNİ söyler (sessiz red yok).
+	if hrp and hrp.Parent then
+		local dx = hrp.Position.X - serverBall.Position.X
+		local dz = hrp.Position.Z - serverBall.Position.Z
+		local distM = math.sqrt(dx * dx + dz * dz) / S
+		if distM > POSSESSION_REACH then
+			reachState = distM
+		else
+			reachState = nil
+		end
+		inStrictReach = distM <= KICK_REACH
+	else
+		reachState = nil
+		inStrictReach = false
+	end
+	updateHint()
+
+	-- Karakter pozu (istemci): yürürken koşu döngüsü, dururken nefes alan
+	-- duruş, SPACE basılıyken hazırlık pozu. Şut penceresi açıkken YAZMAZ:
+	-- KickAnim'i temas anıyla birebir eşleşsin diye sunucu uygular (tek yazar).
+	if poseOk and character and character.Parent and hrp and hrp.Parent then
+		if animClock >= serverKickUntil then
+			-- Hız iki kaynaktan: MoveDirection (girdi niyeti) ve kökün gerçek
+			-- hızı (itme/taşınma). Büyük olanı alınır; tek kaynak hızı 0
+			-- gösterdiğinde koşu animasyonu duruşa düşüp "donmuş" görünüyordu.
+			local moveVel = humanoid and humanoid.MoveDirection or Vector3.zero
+			local rootVel = hrp.AssemblyLinearVelocity or Vector3.zero
+			local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s
+			local pose = windupPose or PlayerPose.walk(animClock, speed)
+			local ok = pcall(HumanoidPose.apply, character, pose)
+			if not ok then
+				poseOk = false
+			end
+		end
 	end
 
 	-- Nişan işareti
@@ -484,6 +627,7 @@ local Striker = require(Shared.Player.Striker)
 local KeeperAnim = require(Shared.Anim.KeeperAnim)
 local KickAnim = require(Shared.Anim.KickAnim)
 local HumanoidPose = require(Shared.Anim.HumanoidPose)
+local PlayerPose = require(Shared.Anim.PlayerPose)
 
 local S = Config.STUDS_PER_METER
 local P = Config.PITCH
@@ -583,7 +727,25 @@ resetBall()
 -- --------------------------------------------------------------- 5) Şut
 -- Oyuncunun şutu: tuşa basıldığında pozisyon seçilir, top TEMAS anında ayrılır.
 local lastKickAt = {}
+-- Oyuncu karakterlerinin prosedürel animasyon saati (yürüyüş fazı + nefes).
+-- Şut beklemede OLMASA da karakter pozlanır: eskiden yalnızca şut sırasında
+-- poz yazıldığı için oyuncu "animasyonlar çalışmıyor" diyordu.
+local playerAnimClock = 0
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
+-- ŞUT TAMPONU: menzil dışındaki istek çöpe gitmez, kısa bir pencere bekletilir.
+-- player -> { at = sim.time, charge, aimZ, aimY, shotType, foot }
+local buffered = {}
+
+-- broadcastState aşağıda tanımlı; Lua'da local'ler bildirim noktasından sonra
+-- görünür olduğu için burada ileri bildirim gerekiyor.
+local broadcastState
+
+--[[ Şut geri bildirimi: istemcide HUD satırında kısa süre gösterilir. ]]
+local function shotHint(kind, text)
+	if broadcastState then
+		broadcastState(kind, nil, text)
+	end
+end
 
 --[[ İstemciden gelen HER değer güvenilmezdir (exploiter arbitrary tablo/string
 	gönderebilir). KickAnim, `SHOT[shotType]` ve `"hip" .. foot` kullandığı için
@@ -614,38 +776,43 @@ local function isFiniteVec3(v)
 	return Validate.vec3(v)
 end
 
-kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
-	local now = os.clock()
-	if lastKickAt[player] and now - lastKickAt[player] < 0.35 then
-		return
-	end
+local KICK_COOLDOWN = 0.35 -- iki şut isteği arasındaki en az süre (s)
 
+--[[ Şut isteğini uygular (hem doğrudan istek hem tampondaki istek aynı yoldan
+     geçer; böylece iki yol farklı kural uygulayamaz).
+     Dönüş: true -> vuruş başladı | false, neden, tamponlanabilir mi ]]
+local function startShot(player, charge, aimZ, aimY, shotType, foot)
+	local BC = Config.BALL_CONTROL
 	local state = playerState(player)
 	if not state then
-		return
+		return false, "karakter hazır değil (HumanoidRootPart yok)", false
 	end
 
 	local control = getControl(player)
-	if not control:canKick(sim.ball, state) then
-		return
+	if not control:canKick(sim.ball, state, sim.time) then
+		if sim.ball.pos.y > BC.kickHeight then
+			return false, string.format(
+				"top %.2f m havada — vuruş yüksekliği %.1f m", sim.ball.pos.y, BC.kickHeight), false
+		end
+		local gap = control:shotGap(sim.ball, state)
+		return false, string.format(
+			"top %.1f m önde — şut menzili %.1f m", gap, BC.possessionReach), gap <= BC.shotBufferReach
 	end
 	if pending[player] then
-		return
+		return false, "şut zaten sürüyor", false
 	end
-
-	lastKickAt[player] = now
 
 	local c = Validate.clamp(charge, 0, 1, 0.5)
 	local targetZ = Validate.clamp(aimZ, -3.3, 3.3, 0)
 	local targetY = Validate.clamp(aimY, 0.2, 2.3, 1.0)
 
 	-- Nişan hatası: yanal sapma (deterministik RNG)
-	local errRad = rng:normal(0, math.rad(Config.BALL_CONTROL.aimErrorDeg))
+	local errRad = rng:normal(0, math.rad(BC.aimErrorDeg))
 	local dx = P.halfLength - sim.ball.pos.x
 	local dz = targetZ - sim.ball.pos.z
 	local dist = math.sqrt(dx * dx + dz * dz)
 	if dist < 0.5 then
-		return
+		return false, "kale ağzındasın: nişan düzlemi kurulamıyor", false
 	end
 	local lateral = math.tan(errRad) * dist
 
@@ -675,6 +842,39 @@ kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, 
 		spin = Vec3.add(spin, Vec3.new(0, rng:symmetric(10), 0)),
 		fired = false,
 	}
+	return true
+end
+
+kickRemote.OnServerEvent:Connect(function(player, charge, aimZ, aimY, shotType, foot)
+	local now = os.clock()
+	if lastKickAt[player] and now - lastKickAt[player] < KICK_COOLDOWN then
+		shotHint("shotRejected", string.format("şut çıkmadı: çok hızlı, iki şut arası en az %.2f s", KICK_COOLDOWN))
+		return
+	end
+
+	local ok, reason, bufferable = startShot(player, charge, aimZ, aimY, shotType, foot)
+	if ok then
+		lastKickAt[player] = now
+		return
+	end
+
+	-- SESSİZ RED YOK. Top sürüşten öndeyse istek TAMPONA alınır: oyuncu topa
+	-- yetişince şut kendiliğinden çıkar (bkz. adım 3a). Tampon menzili de
+	-- aşıldıysa oyuncuya nedeni yazılır.
+	if bufferable and not buffered[player] then
+		buffered[player] = {
+			at = sim.time,
+			charge = charge,
+			aimZ = aimZ,
+			aimY = aimY,
+			shotType = shotType,
+			foot = foot,
+		}
+		lastKickAt[player] = now
+		shotHint("shotBuffered", "şut bekliyor → topa yetiş, kendiliğinden çıkacak (" .. reason .. ")")
+	else
+		shotHint("shotRejected", "şut çıkmadı: " .. reason)
+	end
 end)
 
 -- Sıfırlama da hız sınırlı: herhangi bir istemci bunu spamleyip maçı
@@ -697,13 +897,14 @@ local keeperAnim = nil
 local keeperAnimT = 0
 local keeperDiveRef = nil
 
-local READY_POSE = KeeperAnim.new({ dz = 0, height = 0.5 }):sample(0.15).pose
+local keeperClock = 0 -- kaleci idle animasyonunun saati (nefes/salinim)
 
--- Kaleci pozu: yeni dalış hedefi geldiğinde animasyon başlar; süresi bittiğinde READY_POSE'a döner.
+-- Kaleci pozu: yeni dalış hedefi geldiğinde animasyon başlar; süresi bittiğinde canlı idle pozuna (nefes + salınım) döner.
 local function keeperPose(dt)
 	if not ANIM.keeperPoseEnabled then
 		return nil
 	end
+	keeperClock = keeperClock + dt
 	local target = keeper.diveTarget
 	if target and (not keeperAnim or keeperAnimT >= keeperAnim:duration()) then
 		keeperAnim = KeeperAnim.new({
@@ -720,10 +921,13 @@ local function keeperPose(dt)
 		end
 		keeperAnim = nil
 	end
-	return READY_POSE
+	-- Dalış yoksa heykel değil: nefes + ağırlık salınımı (sahne canlı kalır)
+	return KeeperAnim.idle(keeperClock)
 end
 
-local function broadcastState(event, extra)
+-- hint: şut isteğinin NEDEN çıkmadığı (ya da tampondan çıktığı) oyuncuya
+-- yazıyla bildirilir. Sessiz red, "şut çekemiyorum" şikayetinin köküydü.
+function broadcastState(event, extra, hint)
 	if stateRemote then
 		stateRemote:FireAllClients({
 			goals = stats.goals,
@@ -733,6 +937,7 @@ local function broadcastState(event, extra)
 			sag = goalNet.sag,
 			event = event,
 			extra = extra,
+			hint = hint,
 		})
 	end
 end
@@ -763,6 +968,18 @@ RunService.Heartbeat:Connect(function(frameDt)
 		SceneBuilder.updateStrikerModel(strikerModel, striker:pose(), striker.pos, striker.facing, S)
 	end
 
+	-- 3a) Tampondaki şut istekleri: oyuncu topa yetişince şut kendiliğinden çıkar
+	for player, req in pairs(buffered) do
+		if sim.time - req.at > Config.BALL_CONTROL.shotBufferTime then
+			buffered[player] = nil
+			shotHint("shotExpired", string.format(
+				"şut kaçtı: %.2f s içinde topa yetişemedin", Config.BALL_CONTROL.shotBufferTime))
+		elseif startShot(player, req.charge, req.aimZ, req.aimY, req.shotType, req.foot) then
+			buffered[player] = nil
+			shotHint("shotFired", "şut çıktı (topa yetişildi)")
+		end
+	end
+
 	-- 3) Oyuncuların şutları: savurma tamamlanınca top ayrılır
 	for player, shot in pairs(pending) do
 		shot.t = shot.t + frameDt
@@ -785,10 +1002,27 @@ RunService.Heartbeat:Connect(function(frameDt)
 			HumanoidPose.apply(character, shot.kick:sample(shot.t).pose)
 		end
 		if shot.t >= shot.kick:duration() then
-			if character and ANIM.poseHumanoid then
-				HumanoidPose.clear(character)
-			end
+			-- clear() çağırmıyoruz: vuruş biter bitmez eklemleri kimliğe
+			-- sıfırlamak karakteri bir kare "donmuş" gösteriyordu. Bunun
+			-- yerine 3b'deki yürüyüş pozu devralır (geçiş sürekli).
 			pending[player] = nil
+		end
+	end
+
+	-- 3b) Oyuncu karakterleri: yürüyüş/duruş pozu her karede yazılır.
+	-- Şut bekleyen oyuncunun pozu yukarıdaki döngüde KickAnim'den gelir;
+	-- burada yalnızca şut beklemeyenler pozlanır (KickAnim önceliği korunsun).
+	if ANIM.poseHumanoid then
+		playerAnimClock = playerAnimClock + frameDt
+		for _, player in ipairs(Players:GetPlayers()) do
+			if not pending[player] then
+				local character = player.Character
+				if character and HumanoidPose.supported(character) then
+					local state = playerState(player)
+					local speed = (state and state.speed) or 0 -- m/s (yatay)
+					HumanoidPose.apply(character, PlayerPose.walk(playerAnimClock, speed))
+				end
+			end
 		end
 	end
 
@@ -855,6 +1089,7 @@ Players.PlayerRemoving:Connect(function(player)
 	controls[player] = nil
 	lastKickAt[player] = nil
 	pending[player] = nil
+	buffered[player] = nil
 end)
 
 -- Banner gerçegi soylesin: sutu kim atiyor?
@@ -1127,6 +1362,28 @@ end
 
 function KeeperAnim:duration()
 	return KeeperAnim.DURATION
+end
+
+--[[ Dalış yokken kaleci HEYKEL gibi durmasın: yavaş nefes + ağırlık salınımı.
+     sample() gibi poz tablosu döndürür; sunucu her karede bunu uygular.
+     t = saniye (sunucu saati). ]]
+function KeeperAnim.idle(t)
+	local pose = Pose.new()
+	local breath = math.sin(t * 1.7) * 0.5 + 0.5 -- 0..1, ~3.7 s dönem
+	local sway = math.sin(t * 0.9) -- yana ağırlık aktarımı
+	pose.rootOffset = Vec3.new(sway * 0.06, -0.10 - 0.035 * breath, 0)
+	pose.root = Pose.joint(0, 0, sway * 0.05)
+	pose.spine = Pose.joint(0.16, sway * 0.06, 0)
+	pose.neck = Pose.joint(-0.10, -sway * 0.08, 0)
+	pose.shoulderL = Pose.joint(-1.10 - 0.06 * breath, 0, -0.35)
+	pose.shoulderR = Pose.joint(-1.10 - 0.06 * breath, 0, 0.35)
+	pose.elbowL = Pose.joint(-0.45, 0, 0)
+	pose.elbowR = Pose.joint(-0.45, 0, 0)
+	pose.hipL = Pose.joint(-0.35 - 0.06 * breath, 0, -0.10)
+	pose.hipR = Pose.joint(-0.35 - 0.06 * breath, 0, 0.10)
+	pose.kneeL = Pose.joint(0.70, 0, 0)
+	pose.kneeR = Pose.joint(0.70, 0, 0)
+	return pose
 end
 
 -- Uzanma eğrisi: daha yumuşak hazırlık, sert uzanma, yavaş toparlanma
@@ -1664,6 +1921,92 @@ end
 
 return PartRig
 ]=] },
+	["shared/Anim/PlayerPose"] = { class = "ModuleScript", source = [=[
+--[[
+	PlayerPose — SAHADA OYNAYAN OYUNCUNUN prosedürel hareket animasyonu.
+
+	Neden var: şut pozunu (KickAnim) sunucu yalnızca vuruş beklerken uyguluyordu;
+	geri kalan zamanda karakter ya Roblox'un varsayılan Animator'üne kalıyor ya da
+	donmuş görünüyordu. Kullanıcı bunu "oyuncu animasyonları çalışmıyor" diye
+	yaşıyordu. Bu modül her karede pozlanacak bir tablo verir.
+
+	İki kaynak:
+	  WalkCycle.sample(hız, faz, zaman) — koşu/duruş döngüsünün kendisi (fiziksel
+	    adım uzunluğuna bağlı, kayma yok). Bu modül onu SARAR: zamanı hıza göre
+	    faza çevirir, böylece çağıran tarafın adım uzunluğuyla uğraşması gerekmez.
+	  ready — dururken atletik bekleyiş (WalkCycle'ın duruş dalı).
+
+	Kullanım (istemci, kendi karakteri — en güvenilir yol, ağ sahipliği istemcide):
+		HumanoidPose.apply(hrp.Parent, PlayerPose.walk(t, hiz))
+	Kullanım (sunucu, kendi kontrolündeki karakterler):
+		HumanoidPose.apply(model, PlayerPose.walk(t, hiz))
+
+	Poz sözleşmesi KeeperAnim/KickAnim/WalkCycle ile aynıdır:
+	{ eklemAdı = { x = , y = , z = }, rootOffset = Vec3 }  (Rig uzayı, +z ileri;
+	 Roblox karakterine aynalamayı HumanoidPose yapar.)
+]]
+
+local WalkCycle = require(script.Parent.WalkCycle)
+
+local PlayerPose = {}
+
+-- Tam salınım genliğine ulaşan hız (m/s). WalkCycle içerde speed/7.6 ile
+-- ölçekler; bu sabit yalnızca dışarıya "koşu ne zaman tam koşu olur" bilgisini
+-- vermek ve testlerin eşiğini tek yerden okuması için tutulur.
+PlayerPose.FULL_STRIDE_SPEED = 7.6
+
+--[[ Hız -> salınım oranı (0..1). Dururken 0, FULL_STRIDE_SPEED'de 1.
+     speed : m/s (işaretli olabilir; büyüklüğü kullanılır) ]]
+function PlayerPose.strideAmp(speed)
+	local s = math.abs(speed or 0)
+	if s <= 0 then
+		return 0
+	end
+	if s >= PlayerPose.FULL_STRIDE_SPEED then
+		return 1
+	end
+	return s / PlayerPose.FULL_STRIDE_SPEED
+end
+
+--[[ Zamandan adım fazı üretir (0..1, döner). Faz MESAFEYE bağlıdır: hızlı
+     koşan oyuncu adımlarını sıklaştırır, yavaş yürüyen seyreltir — böylece
+     ayaklar yerde kaymaz.
+     t     : saniye (kesintili olmasın diye sürekli bir saat verilmeli)
+     speed : m/s ]]
+function PlayerPose.phaseAt(t, speed)
+	local s = math.max(0, speed or 0)
+	if s <= 0 then
+		return 0
+	end
+	local traveled = (t or 0) * s -- metre
+	-- WalkCycle.STRIDE metre = bir tam döngü
+	return (traveled / WalkCycle.STRIDE) % 1
+end
+
+--[[ Yürüyüş/koşu pozunu üret. Hız ~0 ise duruşa döner (WalkCycle'ın duruş dalı).
+     t     : saniye
+     speed : m/s
+     Dönüş : poz tablosu ]]
+function PlayerPose.walk(t, speed)
+	local time = t or 0
+	local s = math.max(0, speed or 0)
+	return WalkCycle.sample(s, PlayerPose.phaseAt(time, s), time)
+end
+
+--[[ Duruş pozunu üret (atletik bekleyiş + nefes). Hız verilirse ve yürüyüş
+     eşiğini geçiyorsa walk'a düşer: çağıran tarafın "duruyor mu" diye
+     düşünmesi gerekmez.
+     t     : saniye (nefes fazı)
+     speed : m/s (isteğe bağlı) ]]
+function PlayerPose.ready(t, speed)
+	if PlayerPose.strideAmp(speed) > 0.05 then
+		return PlayerPose.walk(t, speed)
+	end
+	return WalkCycle.sample(0, 0, t or 0)
+end
+
+return PlayerPose
+]=] },
 	["shared/Anim/Pose"] = { class = "ModuleScript", source = [=[
 --[[
 	Pose — eklem açılarının (radyan) aritmetiği.
@@ -1999,16 +2342,22 @@ function WalkCycle.sample(speed, phase, time)
 	local c = math.cos(ph)
 
 	if amp < 0.05 then
-		-- Duruyor: hafif nefes + ağırlık
+		-- Duruyor: atletik bekleyiş + nefes. Eskiden bu dal neredeyse kimlikle
+		-- aynıydı (knee 0.06, rootOffset -0.005) -> karakter sahada HEYKEL
+		-- gibi duruyordu. Dizler kırık, gövde hafif öne, kollar açık: kaleci
+		-- karşısındaki oyuncunun bekleyişi.
 		local breath = math.sin((time or 0) * 1.8) * 0.5 + 0.5
-		pose.spine = Pose.joint(0.04 + 0.02 * breath, 0, 0)
-		pose.shoulderL = Pose.joint(0.04, 0, 0.10 + 0.02 * breath)
-		pose.shoulderR = Pose.joint(0.04, 0, -0.10 - 0.02 * breath)
-		pose.elbowL = Pose.joint(-0.18, 0, 0)
-		pose.elbowR = Pose.joint(-0.18, 0, 0)
-		pose.kneeL = Pose.joint(0.06, 0, 0)
-		pose.kneeR = Pose.joint(0.06, 0, 0)
-		pose.rootOffset = Vec3.new(0, -0.005 * breath, 0)
+		pose.spine = Pose.joint(0.10 + 0.03 * breath, 0, 0)
+		pose.neck = Pose.joint(-0.07, 0, 0)
+		pose.shoulderL = Pose.joint(0.04, 0, 0.26 + 0.03 * breath)
+		pose.shoulderR = Pose.joint(0.04, 0, -0.26 - 0.03 * breath)
+		pose.elbowL = Pose.joint(-0.40, 0, 0)
+		pose.elbowR = Pose.joint(-0.40, 0, 0)
+		pose.kneeL = Pose.joint(0.24 + 0.04 * breath, 0, 0)
+		pose.kneeR = Pose.joint(0.24 + 0.04 * breath, 0, 0)
+		pose.ankleL = Pose.joint(-0.14, 0, 0)
+		pose.ankleR = Pose.joint(-0.14, 0, 0)
+		pose.rootOffset = Vec3.new(0, -0.035 - 0.025 * breath, 0)
 		return pose
 	end
 
@@ -2176,8 +2525,23 @@ Config.BALL_CONTROL = {
 	bodyRadius = 0.42, -- oyuncu gövde yarıçapı (m)
 	bodyHeight = 1.80,
 	controlRadius = 1.45, -- bu mesafede top "ayakta" sayılır
-	kickReach = 1.70, -- şut atılabilen maksimum mesafe
+	kickReach = 2.00, -- şut atılabilen maksimum mesafe (1.70 ilk deneyimde çok dardı)
 	dribbleReach = 1.60,
+
+	--[[ SÜRÜŞ SAHİPLİĞİ: top sürerken dokunuş topu oyuncunun ÖNÜNE iter; bu
+	   yüzden "topa yaklaşınca şut çekemiyorum" oluyordu (5.5 m/s'de boşluk
+	   ~2.2 m > kickReach 2.00 m). Gerçek oyuncu bir adım öndeki topa da vurur:
+	   az önce dokunulmuş top, possessionReach içindeyse şut GEÇERLİDİR.
+	   Sahiplik yoksa (top uzaklardan yuvarlanıp geldi) şut tampona alınır. ]]
+	possessionReach = 3.20, -- az önce dokunulan top için şut menzili
+	possessionTime = 0.60, -- son dokunuşun üstünden bu kadar saniye geçtiyse sahiplik sürer
+
+	--[[ ŞUT TAMPONU (input buffering): SPACE bırakıldığında top menzil
+	   dışındaysa istek ÇÖPE GİTMEZ; oyuncu yetişene kadar kısa bir pencere
+	   bekletilir ve top menzile girince şut kendiliğinden çıkar. Pencere
+	   kapanırsa oyuncuya NEDENİ söylenir (sessiz red yok). ]]
+	shotBufferReach = 6.00, -- bu mesafeye kadar şut isteği tampona alınır
+	shotBufferTime = 0.75, -- tamponun açık kalma süresi (s)
 
 	-- Dokunuş (touch) modeli: gerçekte top sürerken saniyede ~3 dokunuş olur
 	touchInterval = 0.34,
@@ -3772,13 +4136,38 @@ function BallControl:update(ball, player, now)
 	return nil
 end
 
--- Şut atılabilir mi? (mesafe + yükseklik)
-function BallControl:canKick(ball, player)
-	local BC = self.cfg.BALL_CONTROL
+--[[ Oyuncu ile top arasındaki yatay mesafe (m). Şut kapısı, tampon kararı ve
+     istemci uyarısı aynı sayıyı kullanır ki kural ile geri bildirim ayrışmasın. ]]
+function BallControl:shotGap(ball, player)
 	local dx = ball.pos.x - player.pos.x
 	local dz = ball.pos.z - player.pos.z
-	local dist = math.sqrt(dx * dx + dz * dz)
-	return dist <= BC.kickReach and ball.pos.y <= BC.kickHeight
+	return math.sqrt(dx * dx + dz * dz)
+end
+
+--[[ Şut atılabilir mi? (mesafe + yükseklik + SÜRÜŞ SAHİPLİĞİ)
+
+     İki yol:
+       1) top kickReach içindeyse -> her zaman geçerli
+       2) top az önce DOKUNULAN bir topsa (sahiplik) possessionReach'e kadar
+          geçerli. Top sürerken dokunuş topu ileri ittiği için mesafe
+          kickReach'i geçer; eskiden bu durumda şut SESSİZCE reddediliyordu
+          ("topa yaklaştığımda topu sürdüğüm için şut çekemiyorum").
+
+     `now` verilmezse sahiplik yolu hiç denenmez (birim testler katı kuralı
+     ölçebilsin diye). SimLoop her zaman sim.time ile çağırır. ]]
+function BallControl:canKick(ball, player, now)
+	local BC = self.cfg.BALL_CONTROL
+	if ball.pos.y > BC.kickHeight then
+		return false
+	end
+	local dist = self:shotGap(ball, player)
+	if dist <= BC.kickReach then
+		return true
+	end
+	if now == nil then
+		return false
+	end
+	return dist <= BC.possessionReach and (now - self.lastTouch) <= BC.possessionTime
 end
 
 -- Güç -> hız eşlemesi (0..1 -> minKickSpeed..maxKickSpeed)
@@ -5205,8 +5594,10 @@ function SceneBuilder.build(opts)
 	end
 	setupLighting()
 
-	-- Doğma noktası: yarım sahada topun gerisinde (animasyonlar görüş alanında)
-	local spawnX = half and (P.halfLength * 0.18) or 0
+	-- Doğma noktası: topun BİR ADIM gerisinde. Eskiden 11.5 m uzaktaydı: oyuncu
+	-- "şut çekemiyorum" diyordu çünkü menzil kapısı (kickReach) sessizce reddediyordu.
+	-- Artık ilk SPACE'te şut atılabilir; kale ve kaleci zaten kadrajda.
+	local spawnX = half and (ballStart.X / S - 1.5) or 0
 	buildSpawn(root, spawnX)
 
 	ball.CFrame = CFrame.new(ballStart)
