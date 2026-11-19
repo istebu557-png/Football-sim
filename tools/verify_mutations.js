@@ -16,7 +16,7 @@
  *
  * Hız için her vaka yalnızca ilgili kapıyı koşar (VERIFY_ONLY). Tam kanıt:
  *   npm run verify          → 13/13 kapı
- *   npm run verify:mutate   → 48/48 kusur yakalandı
+ *   npm run verify:mutate   → 50/50 kusur yakalandı
  */
 "use strict";
 
@@ -165,9 +165,15 @@ const CASES = [
 
   // ---- "oyuncu animasyonu çalışmıyor" kusur sınıfı (gerçek Roblox ezimleri) ----
   ["M47 poz RenderStepped'e alındı (Animator her karede ezer)", [F.view], "testler",
-    (s) => s.replace("RunService.Stepped:Connect(onStepped)", "RunService.RenderStepped:Connect(onStepped)")],
+    (s) => s.replace("local poseSignal = RunService.PreSimulation or RunService.Stepped",
+      "local poseSignal = RunService.RenderStepped")],
   ["M48 oynayan varsayılan Animator track'leri durdurulmuyor", [F.view], "testler",
     (s) => s.replace("\t\tstopDefaultTracks(char)", "\t\t-- stopDefaultTracks(char)")],
+  ["M49 AnimationConstraint desteği kaldırıldı (yeni R15 rigler donar)", [F.pose], "testler",
+    (s) => s.replace('obj:IsA("Motor6D") or obj:IsA("AnimationConstraint")', 'obj:IsA("Motor6D")')],
+  ["M50 poz PreSimulation yerine Stepped'e alındı (Animator ezimine açık)", [F.view], "testler",
+    (s) => s.replace("local poseSignal = RunService.PreSimulation or RunService.Stepped",
+      "local poseSignal = RunService.Stepped")],
 ];
 
 function read(rel) {

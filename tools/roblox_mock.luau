@@ -456,6 +456,7 @@ local CLASS_PARENTS = {
 	UserInputService = "Instance",
 	ContextActionService = "Instance",
 	Motor6D = "Instance",
+	AnimationConstraint = "Instance", -- AvatarJointUpgrade: yeni R15 eklemleri
 }
 
 local function classIsA(className, query)
@@ -966,6 +967,7 @@ function Mock.install()
 	local runService = makeClass("RunService", "RunService")
 	runService.Heartbeat = makeSignal()
 	runService.RenderStepped = makeSignal()
+	runService.PreSimulation = makeSignal() -- Motor6D/AnimationConstraint pozları
 	runService.Stepped = makeSignal()
 	runService.IsServer = function()
 		return true
@@ -1328,6 +1330,23 @@ function Mock.install()
 		return track
 	end
 
+	-- AvatarJointUpgrade taklidi: Motor6D yerine AnimationConstraint eklemleri.
+	local function upgradeJoints(character)
+		local names = {}
+		for _, obj in ipairs(character:GetChildren()) do
+			if obj:IsA("Motor6D") then
+				names[#names + 1] = obj.Name
+				obj:Destroy()
+			end
+		end
+		for _, name in ipairs(names) do
+			local joint = makeClass("AnimationConstraint", name)
+			joint.Transform = makeCFrame()
+			joint.Parent = character
+		end
+		return #names
+	end
+
 	return {
 		workspace = workspace,
 		runService = runService,
@@ -1337,6 +1356,7 @@ function Mock.install()
 		viewportSize = viewportSize,
 		setMouseLocation = setMouseLocation,
 		addPlayingTrack = addPlayingTrack,
+		upgradeJoints = upgradeJoints,
 		getMouseLocation = function()
 			return mouseLocation
 		end,

@@ -81,7 +81,7 @@ yarım saha + kale + ağ + kaleci + top + stadyum çevresi (`Workspace/FootballP
 
 ```bash
 npm run install:build   # kurulum dosyasını src/'den yeniden üret
-npm test                # 145 kontrol + kurulum senkron denetimi
+npm test                # 146 kontrol + kurulum senkron denetimi
 ```
 
 ---
@@ -105,7 +105,7 @@ kırmızıysa çıkış kodu `1` döner. Her kapı kendi alanında kanıt üreti
 | 6 | Kurulum | `install/FootballSim_Install.lua` kaynaklarla **bit-bit senkron**: 26 ModuleScript + 1 Script + 1 LocalScript, sınıf ve kaynak birebir |
 | 7 | Rojo | `default.project.json` `src/`'nin **tamamını** eşliyor; eşlenmemiş tek dosya yok |
 | 8 | Remote + otorite | `Kick` / `ResetBall` / `MatchState` iki tarafta da var; `FireServer` argüman sayısı = `OnServerEvent` parametre sayısı; `MatchState` alanları istemcinin okuduklarını kapsıyor; `InputEnded → fireKick` zinciri kopuk değil; **her `Ballistics.solveLaunch` çıktısı `isFiniteVec3` denetiminden geçiyor** (silinirse kapı düşer) |
-| 9 | Testler | `tools/spec.luau` → **145 kontrol**, 15 grup, 0 başarısız (test sayısı geri giderse ya da bir grup hiç koşmazsa kapı düşer) |
+| 9 | Testler | `tools/spec.luau` → **146 kontrol**, 15 grup, 0 başarısız (test sayısı geri giderse ya da bir grup hiç koşmazsa kapı düşer) |
 | 10 | Fizik izi | `preview/trace.json` üretiliyor; 6 senaryo, 635 yol noktası sonlu; falso > 2 m, direk gol değil, ağ esner ve topu yutar; `index.html`'in okuduğu her alan JSON'da var |
 | 11 | Anim izi | `preview/anim.json` üretiliyor; 16 sahne / 481 kare, her kare eklem sayısıyla uyumlu ve sonlu; `dive/jump/block/jumpDive` kaleci hareketleri mevcut |
 | 12 | Önizleme | `tools/serve.js` gerçekten ayakta: `/`, `/anim.html`, `/trace.json`, `/anim.json` → 200 + doğru `content-type`, olmayan dosya 404, dizin dışı erişim engelli |
@@ -119,11 +119,11 @@ Kapı 4–5 statik taramadır, kapı 9 canlı testtir: ikisi birlikte "kod Roblo
 Yeşil bir doğrulayıcı, ancak kırmızıya dönebiliyorsa kanıttır:
 
 ```bash
-npm run verify:mutate                          # 48 kusurun tamamı (~28 dk)
+npm run verify:mutate                          # 50 kusurun tamamı (~28 dk)
 MUTATE_ONLY=M41,M44 npm run verify:mutate      # yalnızca seçili kusurlar (kısmi koşu)
 ```
 
-`tools/verify_mutations.js` koda **48 bilinçli kusur** enjekte eder (sözdizimi
+`tools/verify_mutations.js` koda **50 bilinçli kusur** enjekte eder (sözdizimi
 hatası, `Enum.KeyCode.Spacee`, uydurma servis/sınıf, `.Perent`, sunucuda
 `Players.LocalPlayer`, silinmiş rojo eşlemesi, yanlış remote adı, eksik
 `FireServer` argümanı, kopmuş `InputEnded`, silinmiş `isFiniteVec3` koruması,
@@ -276,7 +276,7 @@ fırlatmaz. Model:
 
 ## Ölçülen davranışlar
 
-`npm test` → **145 kontrol**. Öne çıkanlar:
+`npm test` → **146 kontrol**. Öne çıkanlar:
 
 | Ölçüm | Motor | Gerçek dünya |
 |---|---|---|
@@ -341,9 +341,13 @@ simülasyonun kaydıdır; `preview/` bir oyun değil doğrulama aracıdır.
   Script'i kapatmak tek başına yeterli değildir: zaten oynayan varsayılan
   `AnimationTrack`'ler `Animator` içinde yaşamaya devam eder ve `Transform`'u
   her karede yeniden yazar — istemci bunları da `Stop(0)` ile durdurur.
-  `Animate` veya `Motor6D`'ler `CharacterAdded`'dan **sonra** gelirse periyodik
+  `Animate` veya eklemler `CharacterAdded`'dan **sonra** gelirse periyodik
   kontrol / `ChildAdded` ile yakalanır; daha önceki "tek seferlik kontrol"
   yüzünden prosedürel poz hiç açılmıyordu.
+  Yeni deneyimlerde `AvatarJointUpgrade` açık olduğu için R15 eklemleri
+  `Motor6D` değil **`AnimationConstraint`** olur; `HumanoidPose` iki sınıfı da
+  kabul eder ve yalnızca `Transform` yazar (`C0/C1/Part0/Part1` salt-okunur
+  takma adlardır). 49. mutasyon bu desteğin kaldırılmasını yakalar.
   `Config.ANIM.poseHumanoid = false` tüm prosedürel pozu kapatır (kaçış kapağı).
 - **R15 + R6**: R15'te 12 eklem (bel/diz/dirsek dahil), R6'da 5 eklem
   (`Neck`, `Left/Right Shoulder`, `Left/Right Hip`) sürülür. Eski kod R6
@@ -355,9 +359,9 @@ simülasyonun kaydıdır; `preview/` bir oyun değil doğrulama aracıdır.
   istemcide **hemen** başlar, sunucu onayı beklenmez.
   **Zamanlama kritik**: Roblox `Animator`'ı `Motor6D.Transform`'u her karede
   `PreAnimation` sonrası / `PreSimulation` öncesinde ezer. Bu yüzden istemci
-  pozları `RenderStepped` değil **`Stepped`** içinde yazar (animatordan sonra);
+  pozları `RenderStepped` değil **`PreSimulation`** içinde yazar (animatordan sonra);
   kamera, HUD ve top yumuşatma `RenderStepped`'de kalır. `RenderStepped`'e geri
-  alınırsa animasyon görünmez — 47. mutasyon tam bunu denetler.
+  alınırsa animasyon görünmez — 47. ve 50. mutasyonlar tam bunu denetler.
 - **Kaleci boşta heykel değil**: dalış yokken `KeeperAnim.idle(t)` nefes ve
   ağırlık salınımı üretir.
 - **Deterministik**: aynı giriş → aynı poz; `t = 0` başlangıç, `t = DURATION` bitiş.
@@ -371,7 +375,7 @@ npm run preview # http://localhost:8080/anim.html
 
 `preview/anim.html` canvas ile yandan/önden görünüm, oynat/duraklat, zaman çubuğu, temas anı işareti, kemik çizimi ve top işareti sunar. Kaynak: `tools/anim_trace.luau` (11 şut + 5 kaleci sahnesi = 16, `contact` ve `bayrak` alanları ile).
 
-Test: `tools/spec.luau` → **145/145** (8. grup kaleci + kurulum + sahne ağacı + stadyum çevresi, 9. grup anim, 10. grup canlı döngü + şutçu, 11. grup istemci/E2E, 12. grup girdi sertleştirme, 13. grup `Validate` birim testleri, 14. grup fare → nişan).
+Test: `tools/spec.luau` → **146/146** (8. grup kaleci + kurulum + sahne ağacı + stadyum çevresi, 9. grup anim, 10. grup canlı döngü + şutçu, 11. grup istemci/E2E, 12. grup girdi sertleştirme, 13. grup `Validate` birim testleri, 14. grup fare → nişan).
 
 ### Rojo ile (alternatif)
 
@@ -394,7 +398,7 @@ rojo build -o FootballSim.rbxlx
 - [ ] **Adım 6** — 11v11: diziliş, takım AI'sı, baskı, ofansif/defansif geçiş.
 - [ ] **Adım 7** — Ağ: istemci tahmini, gecikme telafisi, bant bütçesi.
 - [ ] **Adım 8** — Sunum: animasyonlar, kamera modları, UI, ses.
-      *Animasyon alt-adımı (şut + kaleci + oyuncu yürüyüşü/duruşu): kodla, FK, testli (145/145). Kamera modu (V izleme) ve HUD (ipucu/güç barı/skor) tamam; ses bekliyor.*
+      *Animasyon alt-adımı (şut + kaleci + oyuncu yürüyüşü/duruşu): kodla, FK, testli (146/146). Kamera modu (V izleme) ve HUD (ipucu/güç barı/skor) tamam; ses bekliyor.*
 
 ---
 

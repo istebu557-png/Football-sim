@@ -725,11 +725,14 @@ local function onFrame(dt)
 	end
 end
 
---[[ KRİTİK ZAMANLAMA: Roblox'un Animator'ı her karede Motor6D.Transform'u
+--[[ KRİTİK ZAMANLAMA: Roblox'un Animator'ı her karede eklem Transform'unu
      PreAnimation sonrası / PreSimulation öncesinde kendi pozlarıyla EZER.
      RenderStepped'de yazılan prosedürel poz bu yüzden ekrana hiç yansımıyordu.
-     Pozu STEPPED içinde (animator güncellemesinden SONRA) yazıyoruz; kamera,
-     HUD ve top yumuşatma RenderStepped'de kalır. ]]
+     Resmî öneri pozu PRE-SIMULATION içinde yazmaktır (Stepped'in yerini aldı);
+     eski oyunlarda olay yoksa Stepped'e düşeriz. Kamera, HUD ve top yumuşatma
+     RenderStepped'de kalır. ]]
+local poseSignal = RunService.PreSimulation or RunService.Stepped
+
 local function onStepped(_dt)
 	if not poseOk or not character or not character.Parent or not hrp or not hrp.Parent then
 		return
@@ -754,5 +757,5 @@ local function onStepped(_dt)
 	end
 end
 
-RunService.Stepped:Connect(onStepped)
+poseSignal:Connect(onStepped)
 RunService.RenderStepped:Connect(onFrame)

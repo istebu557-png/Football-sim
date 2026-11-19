@@ -50,6 +50,27 @@ local function check(cond, msg)
 	end
 end
 
+local function jointComponents(character, jointName)
+	local motor = character and character:FindFirstChild(jointName)
+	if not motor then
+		return nil
+	end
+	return { motor.Transform:GetComponents() }
+end
+
+local function jointsMoved(a, b)
+	if not a or not b then
+		return -1
+	end
+	local moved = 0
+	for i = 1, 12 do
+		if math.abs(a[i] - b[i]) > 1e-9 then
+			moved = moved + 1
+		end
+	end
+	return moved
+end
+
 local function near(actual, expected, tol, label)
 	if math.abs(actual - expected) > tol then
 		error(
@@ -1910,18 +1931,19 @@ local function stepWorld(world, seconds, dt)
 			world.mock.runService.Heartbeat:Fire(dt)
 			world.mock.runService.RenderStepped:Fire(dt)
 			-- Gerçek Roblox'ta Animator bu noktada (RenderStepped SONRASI,
-			-- Stepped ÖNCESİ) Motor6D.Transform'u kendi pozlarıyla ezer.
-			-- Prosedürel poz ancak Stepped içinde yazılırsa görünür kalır.
+			-- PreSimulation ÖNCESİ) eklem Transform'unu kendi pozlarıyla ezer.
+			-- Prosedürel poz ancak PreSimulation içinde yazılırsa görünür kalır.
 			-- Zamanlama testi bunu zorunlu kılar (mock.animatorOverwrite = true);
 			-- diğer testlerde varsayılan animator davranışı taklit edilmez.
 			local localChar = world.mock.localPlayer.Character
 			if world.mock.animatorOverwrite and world.clientOk ~= false and localChar then
 				for _, obj in ipairs(localChar:GetChildren()) do
-					if obj:IsA("Motor6D") then
+					if obj:IsA("Motor6D") or obj:IsA("AnimationConstraint") then
 						obj.Transform = CFrame.new()
 					end
 				end
 			end
+			world.mock.runService.PreSimulation:Fire(dt)
 			world.mock.runService.Stepped:Fire(dt)
 		end)
 		if not ok then
@@ -2435,27 +2457,6 @@ end)
 -- "Oyuncu animasyonları çalışmıyor" şikayetinin uctan uca kanıtı: karakterin
 -- R15 eklemleri gerçekten yazılıyor mu? (Mock karakter artık Motor6D içeriyor;
 -- içermese bu test boşuna yeşil kalırdı.)
-local function jointComponents(character, jointName)
-	local motor = character and character:FindFirstChild(jointName)
-	if not motor then
-		return nil
-	end
-	return { motor.Transform:GetComponents() }
-end
-
-local function jointsMoved(a, b)
-	if not a or not b then
-		return -1
-	end
-	local moved = 0
-	for i = 1, 12 do
-		if math.abs(a[i] - b[i]) > 1e-9 then
-			moved = moved + 1
-		end
-	end
-	return moved
-end
-
 test("oyuncu animasyonu uctan uca: durusta, kosarken ve sута eklemler yaziliyor", function()
 	local animWorld = bootWorld({ striker = false })
 	check(animWorld.installOk and animWorld.serverOk and animWorld.clientOk,
@@ -2595,6 +2596,37 @@ test("Motor6D'ler sonradan gelince de prosedurel poz aciliyor", function()
 	local knee = jointComponents(character, "LeftKnee")
 	check(jointsMoved(knee, { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }) > 0,
 		"gec gelen motorlara poz yazilmadi")
+end)
+
+-- ÜÇÜNCÜ gerçek kırılma: yeni R15 avatarlarda (StarterPlayer.AvatarJointUpgrade
+-- varsayılan) eklemler Motor6D DEĞİL AnimationConstraint'tir. Eski IsA kontrolü
+-- bu karakterde hiç eklem bulmuyor ve prosedürel poz sessizce atlanıyordu.
+test("AvatarJointUpgrade: AnimationConstraint eklemlerine de poz yaziliyor", function()
+	local world = bootWorld({ striker = false, client = false })
+	check(world.installOk and world.serverOk, "sunucu kurulamadi")
+	local character = world.mock.localPlayer.Character
+	local swapped = world.mock.upgradeJoints(character)
+	check(swapped >= 8, "Motor6D -> AnimationConstraint donusumu yapilmadi: " .. tostring(swapped))
+	local hip = character:FindFirstChild("LeftHip")
+	check(hip ~= nil and hip:IsA("AnimationConstraint"), "AnimationConstraint eklemi yok")
+
+	local clientFolder = world.mock.starterPlayerScripts:FindFirstChild("Client")
+	local ballView = clientFolder and clientFolder:FindFirstChild("BallView")
+	check(ballView ~= nil, "BallView bulunamadi")
+	local okClient, errClient = pcall(function()
+		local chunk = assert(load(ballView.Source, "@BallViewAJU"))
+		chunk()
+	end)
+	check(okClient, "istemci yuklenemedi: " .. tostring(errClient))
+
+	local animate = character:FindFirstChild("Animate")
+	check(animate ~= nil and animate.Disabled == true,
+		"AnimationConstraint karakterde varsayilan Animate kapanmadi")
+	local res = stepWorld(world, 0.5)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	local knee = jointComponents(character, "LeftKnee")
+	check(jointsMoved(knee, { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }) > 0,
+		"AnimationConstraint eklemlerine poz yazilmadi (oyuncu animasyonu calismiyor)")
 end)
 
 -- Aynı davranışın SUNUCU tarafı kanıtı: istemci script'i hiç çalışmazken

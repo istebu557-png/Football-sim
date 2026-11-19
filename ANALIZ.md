@@ -10,7 +10,7 @@
 
 Proje, Roblox için **sunucu otoriteli, deterministik, 240 Hz kendi fizik motorunu** kullanan yarım saha futbol simülasyonudur. Top Roblox fiziğine bırakılmaz; aerodinamik (drag + Magnus), analitik zemin teması, sürekli direk çarpışması, ağ sönümlemesi ve prosedürel FK animasyonları kodla üretilir. Dağıtım iki yoldur: tek dosyalık Command Bar kurulumu (`install/FootballSim_Install.lua`, 189.412 karakter) veya Rojo.
 
-**Genel değerlendirme: sistem çalışır durumda ve iddialarının büyük bölümü çalıştırılabilir kanıtla destekleniyor.** 145 test / 15 grup geçiyor; 13/13 entegrasyon kapısı yeşil; doğrulayıcının kör olmadığını göstermek için seçilen 5 mutasyon da yakalandı. Oyuncu animasyonu arızasının kök nedeni bu turda bulunup düzeltildi (bkz. bölüm 9). Ancak kaynak incelemesinde **3 öncelikli (P0) işlevsel/otorite açığı**, **5 orta (P1) tutarlılık/kalite açığı** ve bir dizi ölü API / belge abartısı bulundu.
+**Genel değerlendirme: sistem çalışır durumda ve iddialarının büyük bölümü çalıştırılabilir kanıtla destekleniyor.** 146 test / 15 grup geçiyor; 13/13 entegrasyon kapısı yeşil; doğrulayıcının kör olmadığını göstermek için seçilen mutasyonlar da yakalandı. Oyuncu animasyonu arızasının kök nedeni bu turda bulunup düzeltildi (bkz. bölüm 9). Ancak kaynak incelemesinde **3 öncelikli (P0) işlevsel/otorite açığı**, **5 orta (P1) tutarlılık/kalite açığı** ve bir dizi ölü API / belge abartısı bulundu.
 
 | Öncelik | Bulgu | Kısa etki |
 |---|---|---|
@@ -73,11 +73,11 @@ flowchart TD
 | Komut | Sonuç |
 |---|---|
 | `npm install` | 5 paket kuruldu (`fengari-node-cli`) |
-| `npm test` | **GEÇEN 145 / BAŞARISIZ 0**, 15 grup, kurulum senkron denetimi dahil |
-| `npm run verify` | **13/13 kapı geçti**, 0 uyarı; 30 kaynak derlendi; 145 test; 6 fizik senaryosu/635 nokta; 16 anim sahnesi/481 kare |
-| `MUTATE_ONLY=M16,M31,M44,M47,M48 npm run verify:mutate` | 5/5 kusur yakalandı (belge, tek-yazar, `Animate`, `Stepped` zamanlaması, track durdurma); dosyalar geri yüklendi |
+| `npm test` | **GEÇEN 146 / BAŞARISIZ 0**, 15 grup, kurulum senkron denetimi dahil |
+| `npm run verify` | **13/13 kapı geçti**, 0 uyarı; 30 kaynak derlendi; 146 test; 6 fizik senaryosu/635 nokta; 16 anim sahnesi/481 kare |
+| `MUTATE_ONLY=M47,M48,M49,M50 npm run verify:mutate` | 4/4 kusur yakalandı (`RenderStepped`, track durdurma, `AnimationConstraint` desteği, `Stepped` zamanlaması); dosyalar geri yüklendi |
 
-Not: 48 kusurluk tam mutasyon koşusu (~28 dk) bu analizde çalıştırılmadı; yalnızca temsili alt küme (5/5) doğrulandı.
+Not: 50 kusurluk tam mutasyon koşusu (~28 dk) bu analizde çalıştırılmadı; yalnızca temsili alt kümeler (5/5 ve 4/4) doğrulandı.
 
 ---
 
@@ -204,14 +204,14 @@ Her düzeltme sonrası `npm test && npm run verify` ve ilgili mutasyon vakası (
 ## 9. Oyuncu animasyonu arızası — kök neden ve düzeltme (bu tur)
 
 Kullanıcı "oyuncu animasyonu çalışmıyor" diye bildirdi. Testler yeşil olmasına
-rağmen gerçek Roblox'ta pozların görünmemesinin **üç ayrı nedeni** vardı:
+rağmen gerçek Roblox'ta pozların görünmemesinin **beş ayrı nedeni** vardı:
 
 1. **Zamanlama (ana neden):** istemci `Motor6D.Transform` değerlerini
    `RenderStepped` içinde yazıyordu. Roblox `Animator`'ı her karede bu değerleri
    `PreAnimation` sonrası / `PreSimulation` öncesinde kendi pozlarıyla ezer
-   (Roblox `Motor6D.Transform` dokümantasyonu). Poz artık **`RunService.Stepped`**
-   içinde, animatordan SONRA yazılıyor; kamera/HUD/top yumuşatma
-   `RenderStepped`'de kaldı.
+   (Roblox `Motor6D.Transform` dokümantasyonu). Poz artık **`RunService.PreSimulation`**
+   içinde, animatordan SONRA yazılıyor (eski platformlarda `Stepped` yedeği);
+   kamera/HUD/top yumuşatma `RenderStepped`'de kaldı.
 2. **Zaten oynayan track'ler:** `Animate.Disabled = true` tek başına yeterli
    değil; çalışan `AnimationTrack`'ler `Animator` içinde yaşamaya devam eder.
    İstemci artık `Humanoid` ve `Animator` üzerindeki track'leri
@@ -220,16 +220,27 @@ rağmen gerçek Roblox'ta pozların görünmemesinin **üç ayrı nedeni** vard�
    `Animate` henüz yok olabilir. `ChildAdded` dinleyicisi + 0,25 s periyodik
    kontrol ile geç yüklenen eklemler/Animate yakalanıyor; motor yokken varsayılan
    animasyon açık bırakılıyor (heykel olmasın diye).
+4. **Yeni eklem sınıfı:** `AvatarJointUpgrade` açık deneyimlerde R15 rigleri
+   `Motor6D` yerine **`AnimationConstraint`** ile kurulur. Eski `HumanoidPose`
+   yalnızca `Motor6D` aradığı için bu karakterlerde hiç eklem bulunmuyor ve
+   prosedürel poz sessizce atlanıyordu. `isPoseJoint()` artık iki sınıfı da
+   kabul ediyor; `C0/C1/Part0/Part1` salt-okunur takma ad olduğu için yalnızca
+   `Transform` yazılıyor.
+5. **Zamanlama incelmesi:** Roblox `Stepped`'i `PreSimulation` lehine eskiyor;
+   resmi öneri transform değişikliklerini `PreSimulation` içinde yapmak.
+   Doğrulayıcı kaynakta `PreSimulation or Stepped` bağlantısını statik olarak
+   denetliyor.
 
 **Değişen dosyalar:** `src/client/BallView.client.luau`,
 `tools/roblox_mock.luau` (Animator ezimi + track taklidi), `tools/spec.luau`
-(3 yeni koruma testi), `tools/verify.js` (API allowlist),
-`tools/verify_mutations.js` (M47/M48), `README.md`, kurulum dosyası.
+(4 yeni koruma testi), `tools/verify.js` (API allowlist + statik zamanlama/
+ eklem denetimi), `tools/verify_mutations.js` (M47–M50), `README.md`, kurulum dosyası.
 
-**Doğrulama:** `npm test` 145/145, `npm run verify` 13/13,
-`MUTATE_ONLY=M16,M31,M44,M47,M48 npm run verify:mutate` 5/5 yakalandı.
-M47 tam olarak "poz RenderStepped'e geri alındı" kusurunu, M48 ise track
-durdurmanın kaldırılmasını yakalıyor.
+**Doğrulama:** `npm test` 146/146, `npm run verify` 13/13,
+`MUTATE_ONLY=M47,M48,M49,M50 npm run verify:mutate` 4/4 yakalandı. M47 pozun
+`RenderStepped`'e alınmasını, M48 track durdurmanın kaldırılmasını, M49
+`AnimationConstraint` desteğinin silinmesini, M50 `PreSimulation`'ın `Stepped`e
+indirilmesini yakalıyor.
 
 > Not: varsayılan kamera 1. şahıstır; Roblox kendi gövdeni gizler. Kendi
 > animasyonunu izlemek için `C` ile 3. şahsa geçmek gerekir.
@@ -240,9 +251,9 @@ durdurmanın kaldırılmasını yakalıyor.
 
 ```bash
 npm install
-npm test                             # 145 kontrol + kurulum senkronu
+npm test                             # 146 kontrol + kurulum senkronu
 npm run verify                       # 13 entegrasyon kapısı
-npm run verify:mutate                # 46 kusur (~28 dk)
+npm run verify:mutate                # 50 kusur (~28 dk)
 MUTATE_ONLY=M41,M44 npm run verify:mutate  # hızlı alt küme
 npm run trace                        # preview/trace.json (6 senaryo)
 npm run anim                         # preview/anim.json (16 sahne)
