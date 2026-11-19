@@ -16,7 +16,7 @@
  *
  * Hız için her vaka yalnızca ilgili kapıyı koşar (VERIFY_ONLY). Tam kanıt:
  *   npm run verify          → 13/13 kapı
- *   npm run verify:mutate   → 46/46 kusur yakalandı
+ *   npm run verify:mutate   → 48/48 kusur yakalandı
  */
 "use strict";
 
@@ -82,7 +82,7 @@ const CASES = [
   ["M15 iz: index.html olmayan alanı okuyor", [F.index], "iz",
     (s) => s.replace("shot.curve", "shot.eğrilikYok")],
   ["M16 belge: README test sayısı bayatladı", [F.readme], "belge",
-    (s) => s.replace("**143 kontrol**", "**99 kontrol**")],
+    (s) => s.replace(/\*\*\d+ kontrol\*\*/, "**99 kontrol**")],
   ["M17 önizleme: preview/anim.html silindi", [F.anim], "onizleme",
     () => null], // özel: dosya silinir (aşağıda DELETE olarak ele alınır)
   ["M18 bir spec kontrolü başarısız", [F.spec], "testler",
@@ -121,7 +121,7 @@ const CASES = [
   ["M30 kaleci boşta donuyor (idle → sabit poz)", [F.loop], "testler",
     (s) => s.replace("return KeeperAnim.idle(keeperClock)", "return KeeperAnim.idle(0)")],
   ["M31 istemci tek-yazar kuralını bozuyor (şut sırasında o da poz yazıyor)", [F.view], "testler",
-    (s) => s.replace("\t\tif animClock >= serverKickUntil then", "\t\tif true then")],
+    (s) => s.replace("\tif animClock >= serverKickUntil then", "\tif true then")],
   ["M32 istemci hızı yalnız girdiden okuyor (koşu animasyonu donuyor)", [F.view], "testler",
     (s) => s.replace("local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s",
       "local speed = moveVel.Magnitude / S -- stud/s -> m/s")],
@@ -162,6 +162,12 @@ const CASES = [
     (s) => s.replace("local alt = findMotors(character, JOINTS_R6)", "local alt = {}")],
   ["M46 nişan son çaresi silindi (sırtı dönükken şut sessizce yutulur)", [F.view], "testler",
     (s) => s.replace("return Vector3.new(GOAL_PLANE, 1.0 * S, 0)", "return nil")],
+
+  // ---- "oyuncu animasyonu çalışmıyor" kusur sınıfı (gerçek Roblox ezimleri) ----
+  ["M47 poz RenderStepped'e alındı (Animator her karede ezer)", [F.view], "testler",
+    (s) => s.replace("RunService.Stepped:Connect(onStepped)", "RunService.RenderStepped:Connect(onStepped)")],
+  ["M48 oynayan varsayılan Animator track'leri durdurulmuyor", [F.view], "testler",
+    (s) => s.replace("\t\tstopDefaultTracks(char)", "\t\t-- stopDefaultTracks(char)")],
 ];
 
 function read(rel) {
