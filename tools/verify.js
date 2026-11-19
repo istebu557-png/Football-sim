@@ -413,6 +413,7 @@ const ROBLOX_METHODS = new Set([
   "ApplyAngularImpulse", "AddForce", "GetVelocityAtPosition", "Raycast",
   "GetPartBoundsInBox", "GetPartBoundsInRadius", "FindPartOnRay", "FindPartOnRayWithIgnoreList",
   "TweenSize", "TweenPosition", "Play", "Stop", "Pause", "Resume", "LoadAnimation",
+  "GetPlayingAnimationTracks",
   "BindAction", "UnbindAction", "BindActionAtPriority", "UnbindAllActions",
   "GetString", "SetCore", "SetCoreGuiEnabled", "AddItem", "SendNotification",
   "Lerp", "Inverse", "ToWorldSpace", "ToObjectSpace", "PointToWorldSpace",

@@ -758,6 +758,13 @@ local function makeClass(className, name)
 		return rawget(self, "__props").State
 	end
 
+	-- Humanoid / Animator: oynayan AnimationTrack'ler. Gerçek Roblox'ta bir
+	-- track oynarken Animator Motor6D.Transform'u her karede ezer; testler
+	-- prosedürel pozun bu track'leri durdurduğunu ölçebilsin diye taklit edilir.
+	function methods:GetPlayingAnimationTracks()
+		return rawget(self, "__props").__playingTracks or {}
+	end
+
 	for nameMethod, fn in pairs(methods) do
 		rawset(obj, nameMethod, fn)
 	end
@@ -1304,6 +1311,23 @@ function Mock.install()
 		return mouseLocation
 	end
 
+	-- Test yardımcısı: karakterin Humanoid'inde oynayan bir track oluşturur.
+	-- İstemci prosedürel pozlamaya geçince bu track durdurulmalıdır.
+	local function addPlayingTrack(character, name)
+		local humanoid = character and character:FindFirstChild("Humanoid", true)
+		if not humanoid then
+			return nil
+		end
+		local props = rawget(humanoid, "__props")
+		props.__playingTracks = props.__playingTracks or {}
+		local track = { Name = name or "RunAnim", stopped = false }
+		function track:Stop(_fadeTime)
+			self.stopped = true
+		end
+		props.__playingTracks[#props.__playingTracks + 1] = track
+		return track
+	end
+
 	return {
 		workspace = workspace,
 		runService = runService,
@@ -1312,6 +1336,7 @@ function Mock.install()
 		userInputService = userInputService,
 		viewportSize = viewportSize,
 		setMouseLocation = setMouseLocation,
+		addPlayingTrack = addPlayingTrack,
 		getMouseLocation = function()
 			return mouseLocation
 		end,

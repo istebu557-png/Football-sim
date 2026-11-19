@@ -1909,6 +1909,20 @@ local function stepWorld(world, seconds, dt)
 		local ok, err = pcall(function()
 			world.mock.runService.Heartbeat:Fire(dt)
 			world.mock.runService.RenderStepped:Fire(dt)
+			-- Gerçek Roblox'ta Animator bu noktada (RenderStepped SONRASI,
+			-- Stepped ÖNCESİ) Motor6D.Transform'u kendi pozlarıyla ezer.
+			-- Prosedürel poz ancak Stepped içinde yazılırsa görünür kalır.
+			-- Zamanlama testi bunu zorunlu kılar (mock.animatorOverwrite = true);
+			-- diğer testlerde varsayılan animator davranışı taklit edilmez.
+			local localChar = world.mock.localPlayer.Character
+			if world.mock.animatorOverwrite and world.clientOk ~= false and localChar then
+				for _, obj in ipairs(localChar:GetChildren()) do
+					if obj:IsA("Motor6D") then
+						obj.Transform = CFrame.new()
+					end
+				end
+			end
+			world.mock.runService.Stepped:Fire(dt)
 		end)
 		if not ok then
 			errs[#errs + 1] = tostring(err)
@@ -2500,6 +2514,87 @@ test("oyuncu animasyonu uctan uca: durusta, kosarken ve sута eklemler yaziliy
 	local settledPose = jointComponents(character, "RightHip")
 	check(jointsMoved(afterShot, settledPose) > 0,
 		"sut bittikten sonra karakter dondu: yuruyus/durus pozu devralmadi")
+end)
+
+-- GERÇEK ROBLOX KIRILMASI: Motor6D.Transform, Animator tarafından her karede
+-- RenderStepped SONRASI / Stepped ÖNCESİ ezilir. Mock artık bu ezmeyi taklit
+-- ediyor; poz yalnızca Stepped içinde yazılırsa görünür kalır. Ayrıca zaten
+-- oynayan varsayılan AnimationTrack'ler script kapatılsa da yaşamaya devam
+-- eder — onların da durdurulması gerekir.
+test("istemci pozu Animator eziminden sonra yazilir, varsayilan track durdurulur", function()
+	local animWorld = bootWorld({ striker = false })
+	check(animWorld.installOk and animWorld.serverOk and animWorld.clientOk,
+		"dunya kurulamadi: " .. tostring(animWorld.installErr or animWorld.serverErr or animWorld.clientErr))
+	local character = animWorld.hrp and animWorld.hrp.Parent
+	local animate = character and character:FindFirstChild("Animate")
+	check(animate ~= nil and animate.Disabled == true, "varsayilan Animate kapatilmadi")
+
+	-- İstemci bağlandıktan SONRA başlayan varsayilan kosma track'i
+	local track = animWorld.mock.addPlayingTrack(character, "RunAnim")
+	check(track ~= nil, "mock animasyon track'i uretilemedi")
+	-- En kötü durum: Animator her karede Transform'u eziyor. Poz yalnızca
+	-- Stepped'de yazılırsa görünür kalır; RenderStepped'de yazılırsa kaybolur.
+	animWorld.mock.animatorOverwrite = true
+	placePlayerAtBall(animWorld, 0.8)
+	local res = stepWorld(animWorld, 0.5)
+	check(#res.errors == 0, "kare dongusu hata verdi: " .. table.concat(res.errors, " | "))
+	check(track.stopped == true, "oynayan varsayilan Animator track'i durdurulmadi")
+
+	-- Mock her karede Transform'u identity yapıp SONRA Stepped'i çalıştırıyor:
+	-- poz hâlâ okunabiliyorsa yazım doğru zamanda yapılıyor demektir.
+	local knee = jointComponents(character, "LeftKnee")
+	check(jointsMoved(knee, { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }) > 0,
+		"Stepped sonrasi diz pozunu Animator ezdi (oyuncu animasyonu görünmez)")
+
+	-- Respawn/streaming sırasında sonradan gelen Animate de kapatılmalı.
+	animate:Destroy()
+	local lateAnimate = Instance.new("LocalScript")
+	lateAnimate.Name = "Animate"
+	lateAnimate.Parent = character
+	local lateRes = stepWorld(animWorld, 0.1)
+	check(#lateRes.errors == 0, "gec gelen Animate sonrasi hata: " .. table.concat(lateRes.errors, " | "))
+	check(lateAnimate.Disabled == true, "sonradan gelen Animate kapatilmadi (pozu ezer)")
+end)
+
+-- İkinci gerçek kırılma: CharacterAdded anında Motor6D'ler henüz yok olabilir.
+-- Tek seferlik supported() kontrolü bu durumda pozu hiç açmaz.
+test("Motor6D'ler sonradan gelince de prosedurel poz aciliyor", function()
+	local world = bootWorld({ striker = false, client = false })
+	check(world.installOk and world.serverOk, "sunucu kurulamadi")
+	local character = world.mock.localPlayer.Character
+	local motors = {}
+	for _, obj in ipairs(character:GetChildren()) do
+		if obj:IsA("Motor6D") then
+			motors[#motors + 1] = obj
+		end
+	end
+	check(#motors >= 8, "mock R15 eklemleri bulunamadi")
+	for _, motor in ipairs(motors) do
+		motor.Parent = nil
+	end
+
+	local clientFolder = world.mock.starterPlayerScripts:FindFirstChild("Client")
+	local ballView = clientFolder and clientFolder:FindFirstChild("BallView")
+	check(ballView ~= nil, "BallView bulunamadi")
+	local okClient, errClient = pcall(function()
+		local chunk = assert(load(ballView.Source, "@BallViewLate"))
+		chunk()
+	end)
+	check(okClient, "istemci yuklenemedi: " .. tostring(errClient))
+
+	local animate = character:FindFirstChild("Animate")
+	check(animate ~= nil and animate.Disabled ~= true,
+		"motorlar yokken varsayilan animasyon kapatilmamali (karakter heykele donmesin)")
+
+	for _, motor in ipairs(motors) do
+		motor.Parent = character
+	end
+	local res = stepWorld(world, 0.5)
+	check(#res.errors == 0, "motorlar gelince hata: " .. table.concat(res.errors, " | "))
+	check(animate.Disabled == true, "motorlar gelince varsayilan Animate kapanmadi")
+	local knee = jointComponents(character, "LeftKnee")
+	check(jointsMoved(knee, { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }) > 0,
+		"gec gelen motorlara poz yazilmadi")
 end)
 
 -- Aynı davranışın SUNUCU tarafı kanıtı: istemci script'i hiç çalışmazken

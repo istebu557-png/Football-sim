@@ -212,21 +212,67 @@ local function setJumpEnabled(enabled)
 end
 
 local poseOk = false -- karakter pozlanabiliyor mu (R15 ya da R6)?
+local poseConn = nil -- eklemler/Animate sonradan gelirse yeniden denemek için
+local poseCheckClock = 0 -- periyodik uygunluk kontrolü (geç yüklenen R6/R15)
+local poseSuppressed = false -- poz yazımı bir kez bozulduysa otomatik geri açma
 
 --[[ Roblox'un varsayılan karakter animasyonu (`Animate` LocalScript) her karede
      Motor6D.Transform'a KENDİ pozunu yazar ve bizim prosedürel pozumuzu EZER.
-     Studio'da "animasyonlar çalışmıyor" görünmesinin asıl nedeni bu: kod doğru
-     pozu üretiyor ama ekrana varsayılan animasyon yansıyor.
-     Pozlama gerçekten çalışıyorsa varsayılanı kapatırız; çalışmıyorsa (eklem
-     bulunamadı) DOKUNMAYIZ ki karakter donmuş bir heykele dönmesin.
-     Dönüş: karakterde Animate script'i bulundu mu? ]]
-local function setDefaultAnimateEnabled(char, enabled)
-	local animate = char:FindFirstChild("Animate")
-	if animate and animate:IsA("LocalScript") then
-		animate.Disabled = not enabled
-		return true
+     SCRIPT'i KAPATMAK YETERLİ DEĞİL: zaten oynayan AnimationTrack'ler Animator
+     içinde yaşamaya devam eder ve her karede Transform'u yeniden yazar. Bu
+     yüzden çalışan track'leri de durduruyoruz. ]]
+local function stopDefaultTracks(char)
+	local hum = char and char:FindFirstChild("Humanoid", true)
+	local animator = hum and hum:FindFirstChild("Animator", true)
+	local function stopTracks(obj)
+		if not obj or not obj.GetPlayingAnimationTracks then
+			return
+		end
+		local ok, tracks = pcall(function()
+			return obj:GetPlayingAnimationTracks()
+		end)
+		if not ok or type(tracks) ~= "table" then
+			return
+		end
+		for _, track in ipairs(tracks) do
+			pcall(function()
+				track:Stop(0)
+			end)
+		end
 	end
-	return false
+	stopTracks(hum)
+	stopTracks(animator)
+end
+
+local function setDefaultAnimateEnabled(char, enabled)
+	if not char then
+		return
+	end
+	-- CharacterAdded sırasında Animate bazen biraz sonra eklenir; recursive
+	-- arama ve sonraki ChildAdded/periyodik kontrol bunu yakalar.
+	local animate = char:FindFirstChild("Animate", true)
+	if animate and (animate:IsA("LocalScript") or animate:IsA("Script")) then
+		animate.Disabled = not enabled
+	end
+	if not enabled then
+		stopDefaultTracks(char)
+	end
+end
+
+-- Motor6D'ler CharacterAdded anında henüz mevcut olmayabilir: pozu yalnızca
+-- bir kez kontrol etmek "animasyon çalışmıyor" şikâyetinin ikinci sebebidir.
+local function refreshPoseSupport(char)
+	char = char or character
+	if not char or poseSuppressed then
+		return
+	end
+	if POSE_HUMANOID and HumanoidPose and PlayerPose then
+		local ok, supported = pcall(HumanoidPose.supported, char)
+		poseOk = ok and supported == true
+	else
+		poseOk = false
+	end
+	setDefaultAnimateEnabled(char, not poseOk)
 end
 
 local function bindCharacter(char)
@@ -234,13 +280,19 @@ local function bindCharacter(char)
 	hrp = char:WaitForChild("HumanoidRootPart", 10)
 	humanoid = char:WaitForChild("Humanoid", 10)
 	setJumpEnabled(false)
-	poseOk = false
-	if POSE_HUMANOID and HumanoidPose and PlayerPose then
-		local ok, supported = pcall(HumanoidPose.supported, char)
-		poseOk = ok and supported == true
+	if poseConn then
+		poseConn:Disconnect()
+		poseConn = nil
 	end
-	-- Prosedürel poz çalışıyorsa varsayılan animasyon kapanır (yoksa ezer).
-	setDefaultAnimateEnabled(char, not poseOk)
+	poseOk = false
+	poseSuppressed = false
+	poseCheckClock = 0
+	refreshPoseSupport(char)
+	poseConn = char.ChildAdded:Connect(function(child)
+		if child:IsA("Motor6D") or child:IsA("Animator") or child.Name == "Animate" then
+			refreshPoseSupport(char)
+		end
+	end)
 	-- Yeni karakterde Humanoid de yeni: kamera kipi (1. şahıs kilidi) yeniden
 	-- uygulanmalı, aksi halde respawn sonrası 3. şahısta kalır.
 	appliedCameraMode = nil
@@ -658,26 +710,12 @@ local function onFrame(dt)
 	end
 	updateHint()
 
-	-- Karakter pozu (istemci): yürürken koşu döngüsü, dururken nefes alan
-	-- duruş, SPACE basılıyken hazırlık pozu. Şut penceresi açıkken YAZMAZ:
-	-- KickAnim'i temas anıyla birebir eşleşsin diye sunucu uygular (tek yazar).
-	if poseOk and character and character.Parent and hrp and hrp.Parent then
-		if animClock >= serverKickUntil then
-			-- Hız iki kaynaktan: MoveDirection (girdi niyeti) ve kökün gerçek
-			-- hızı (itme/taşınma). Büyük olanı alınır; tek kaynak hızı 0
-			-- gösterdiğinde koşu animasyonu duruşa düşüp "donmuş" görünüyordu.
-			local moveVel = humanoid and humanoid.MoveDirection or Vector3.zero
-			local rootVel = hrp.AssemblyLinearVelocity or Vector3.zero
-			local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s
-			local pose = windupPose or PlayerPose.walk(animClock, speed)
-			local ok = pcall(HumanoidPose.apply, character, pose)
-			if not ok then
-				-- Pozlama bozuldu: karakteri T-pozda DONMUŞ bırakma — varsayılan
-				-- Roblox animasyonunu geri aç (kendi kendini onaran davranış).
-				poseOk = false
-				setDefaultAnimateEnabled(character, true)
-			end
-		end
+	-- Motor6D'ler geç yüklenebilir (CharacterAdded ≠ karakter hazır). Arada bir
+	-- yeniden dene; aksi hâlde prosedürel poz hiç açılmadan kalır.
+	poseCheckClock = poseCheckClock + dt
+	if poseCheckClock >= 0.25 then
+		poseCheckClock = 0
+		refreshPoseSupport()
 	end
 
 	-- Nişan işareti
@@ -702,6 +740,36 @@ local function onFrame(dt)
 	end
 end
 
+--[[ KRİTİK ZAMANLAMA: Roblox'un Animator'ı her karede Motor6D.Transform'u
+     PreAnimation sonrası / PreSimulation öncesinde kendi pozlarıyla EZER.
+     RenderStepped'de yazılan prosedürel poz bu yüzden ekrana hiç yansımıyordu.
+     Pozu STEPPED içinde (animator güncellemesinden SONRA) yazıyoruz; kamera,
+     HUD ve top yumuşatma RenderStepped'de kalır. ]]
+local function onStepped(_dt)
+	if not poseOk or not character or not character.Parent or not hrp or not hrp.Parent then
+		return
+	end
+	-- Şut penceresi açıkken sunucu yazar (tek yazar kuralı); istemci karışmaz.
+	if animClock >= serverKickUntil then
+		-- Hız iki kaynaktan: MoveDirection (girdi niyeti) ve kökün gerçek
+		-- hızı (itme/taşınma). Büyük olanı alınır; tek kaynak hızı 0
+		-- gösterdiğinde koşu animasyonu duruşa düşüp "donmuş" görünüyordu.
+		local moveVel = humanoid and humanoid.MoveDirection or Vector3.zero
+		local rootVel = hrp.AssemblyLinearVelocity or Vector3.zero
+		local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s
+		local pose = windupPose or PlayerPose.walk(animClock, speed)
+		local ok = pcall(HumanoidPose.apply, character, pose)
+		if not ok then
+			-- Pozlama bozuldu: karakteri T-pozda DONMUŞ bırakma — varsayılan
+			-- Roblox animasyonunu geri aç ve otomatik yeniden denemeyi bırak.
+			poseOk = false
+			poseSuppressed = true
+			setDefaultAnimateEnabled(character, true)
+		end
+	end
+end
+
+RunService.Stepped:Connect(onStepped)
 RunService.RenderStepped:Connect(onFrame)
 ]=] },
 	["server/SimLoop"] = { class = "Script", source = [=[
