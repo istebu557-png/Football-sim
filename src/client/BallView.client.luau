@@ -74,6 +74,9 @@ local HumanoidPose = loadSharedAnim("HumanoidPose")
 local PlayerPose = loadSharedAnim("PlayerPose")
 local KickAnim = loadSharedAnim("KickAnim")
 local animClock = 0 -- sürekli saat: adım fazı ve nefes için
+-- Adım fazı ve genlik BİRİKTİRİLİR (mutlak saat * anlık hız değil): hız
+-- değiştiğinde poz sıçramaz. Sunucuda her oyuncu için ayrı state tutulur.
+local poseWalkState = PlayerPose and PlayerPose.newState and PlayerPose.newState() or nil
 -- Vuruş pozu için TEK YAZAR kuralı: sunucu şutu beklerken (pending) pozu o
 -- yazar; istemci aynı anda yazarsa iki kaynak aynı eklem için yarışır ve bacak
 -- titrer. İstemci yalnızca iki durumda kendi pozunu yazar:
@@ -274,7 +277,7 @@ local function bindCharacter(char)
 	poseCheckClock = 0
 	refreshPoseSupport(char)
 	poseConn = char.ChildAdded:Connect(function(child)
-		if child:IsA("Motor6D") or child:IsA("Animator") or child.Name == "Animate" then
+		if child:IsA("Motor6D") or child:IsA("AnimationConstraint") or child:IsA("Animator") or child.Name == "Animate" then
 			refreshPoseSupport(char)
 		end
 	end)
@@ -733,26 +736,35 @@ end
      RenderStepped'de kalır. ]]
 local poseSignal = RunService.PreSimulation or RunService.Stepped
 
-local function onStepped(_dt)
+local function onStepped(dt)
 	if not poseOk or not character or not character.Parent or not hrp or not hrp.Parent then
 		return
 	end
+	-- Hız iki kaynaktan: MoveDirection (girdi niyeti) ve kökün gerçek
+	-- hızı (itme/taşınma). Büyük olanı alınır; tek kaynak hızı 0
+	-- gösterdiğinde koşu animasyonu duruşa düşüp "donmuş" görünüyordu.
+	local moveVel = humanoid and humanoid.MoveDirection or Vector3.zero
+	local rootVel = hrp.AssemblyLinearVelocity or Vector3.zero
+	local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s
+	-- State, şut penceresinde de ilerler: sunucu vuruş pozunu yazarken istemci
+	-- poz uygulamasa bile faz birikmeye devam eder; pencere kapanınca yürüyüş
+	-- pozu kaldığı yerden (sıçramadan) devralır.
+	local walkPose = nil
+	if poseWalkState then
+		walkPose = PlayerPose.step(poseWalkState, dt, animClock, speed)
+	end
 	-- Şut penceresi açıkken sunucu yazar (tek yazar kuralı); istemci karışmaz.
 	if animClock >= serverKickUntil then
-		-- Hız iki kaynaktan: MoveDirection (girdi niyeti) ve kökün gerçek
-		-- hızı (itme/taşınma). Büyük olanı alınır; tek kaynak hızı 0
-		-- gösterdiğinde koşu animasyonu duruşa düşüp "donmuş" görünüyordu.
-		local moveVel = humanoid and humanoid.MoveDirection or Vector3.zero
-		local rootVel = hrp.AssemblyLinearVelocity or Vector3.zero
-		local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s
-		local pose = windupPose or PlayerPose.walk(animClock, speed)
-		local ok = pcall(HumanoidPose.apply, character, pose)
-		if not ok then
-			-- Pozlama bozuldu: karakteri T-pozda DONMUŞ bırakma — varsayılan
-			-- Roblox animasyonunu geri aç ve otomatik yeniden denemeyi bırak.
-			poseOk = false
-			poseSuppressed = true
-			setDefaultAnimateEnabled(character, true)
+		local pose = windupPose or walkPose
+		if pose then
+			local ok = pcall(HumanoidPose.apply, character, pose)
+			if not ok then
+				-- Pozlama bozuldu: karakteri T-pozda DONMUŞ bırakma — varsayılan
+				-- Roblox animasyonunu geri aç ve otomatik yeniden denemeyi bırak.
+				poseOk = false
+				poseSuppressed = true
+				setDefaultAnimateEnabled(character, true)
+			end
 		end
 	end
 end

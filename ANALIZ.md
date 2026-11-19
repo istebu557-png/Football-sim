@@ -77,7 +77,7 @@ flowchart TD
 | `npm run verify` | **13/13 kapı geçti**, 0 uyarı; 30 kaynak derlendi; 146 test; 6 fizik senaryosu/635 nokta; 16 anim sahnesi/481 kare |
 | `MUTATE_ONLY=M47,M48,M49,M50 npm run verify:mutate` | 4/4 kusur yakalandı (`RenderStepped`, track durdurma, `AnimationConstraint` desteği, `Stepped` zamanlaması); dosyalar geri yüklendi |
 
-Not: 50 kusurluk tam mutasyon koşusu (~28 dk) bu analizde çalıştırılmadı; yalnızca temsili alt kümeler (5/5 ve 4/4) doğrulandı.
+Not: 54 kusurluk tam mutasyon koşusu (~28 dk) bu analizde çalıştırılmadı; yalnızca temsili alt kümeler (5/5, 4/4 ve 4/4) doğrulandı.
 
 ---
 
@@ -236,7 +236,7 @@ rağmen gerçek Roblox'ta pozların görünmemesinin **beş ayrı nedeni** vard�
 (4 yeni koruma testi), `tools/verify.js` (API allowlist + statik zamanlama/
  eklem denetimi), `tools/verify_mutations.js` (M47–M50), `README.md`, kurulum dosyası.
 
-**Doğrulama:** `npm test` 146/146, `npm run verify` 13/13,
+**Doğrulama:** `npm test` 149/149, `npm run verify` 13/13,
 `MUTATE_ONLY=M47,M48,M49,M50 npm run verify:mutate` 4/4 yakalandı. M47 pozun
 `RenderStepped`'e alınmasını, M48 track durdurmanın kaldırılmasını, M49
 `AnimationConstraint` desteğinin silinmesini, M50 `PreSimulation`'ın `Stepped`e
@@ -247,13 +247,52 @@ indirilmesini yakalıyor.
 
 ---
 
-## 10. Komut referansı
+## 10. Animasyonun "ışınlanarak" gerçekleşmesi — üçüncü kök neden
+
+Kullanıcı bir sonraki turda "animasyon ışınlanarak gerçekleşiyor" diye bildirdi.
+Bu, eklemlerin yazılmaması değil, **yazılma biçiminin süreksiz** olmasıydı.
+
+**Kök neden 1 — faz formülü.** `PlayerPose.phaseAt(t, speed)` fazı
+`(t * speed / STRIDE) % 1` ile üretiyordu. `t` mutlak animasyon saati olduğu
+için hız sabitken bile uzadıkça büyüyordu; hız bir karede değiştiğinde
+(özellikle uzun süre koştuktan sonra durup tekrar koşmaya başlayınca) faz
+rastgele bir değere atlıyordu. Örnek: `t=2.10 s` iken hız 0→6 yapılırsa faz
+0.68'e, dolayısıyla kalça açısı bir karede ~0.57 rad sıçrıyordu.
+
+**Kök neden 2 — sert eşik.** `WalkCycle.sample()` amp < 0.05 dalında duruş,
+üstünde koşu pozunu seçiyordu. Eşik geçildiğinde diz (~0.24 → ~0.12), omuz
+(~0.26 → ~0.12) ve gövde açıları bir karede değişiyordu.
+
+**Düzeltme:**
+- `PlayerPose.newState()` / `PlayerPose.step(state, dt, time, speed)` eklendi.
+  Faz `state.phase += speed * dt / STRIDE` ile birikir; `dt` 0.1 s ile sınırlı
+  (sekme arka plana geçince faz yarım döngü atlamaz). Genlik üstel yumuşatma
+  (`BLEND_TAU = 0.15 s`) ile hedefe yaklaşır.
+- İstemci (`BallView`) ve sunucu (`SimLoop`) canlı kare döngülerinde artık
+  `step()` kullanıyor. Sunucuda oyuncu başına weak-key state tablosu var.
+  `walk()` / `phaseAt()` yalnızca saf test yardımcısı olarak kaldı.
+- `WalkCycle.sample()` duruş ve koşu pozlarini `Pose.blend` ile sürekli
+  karıştırıyor; amp=0 birebir duruş, amp=1 birebir koşu.
+- `BallView` `ChildAdded` dinleyicisi `AnimationConstraint` eklemlerini de
+  yakalıyor (geç yüklenen yeni riglerde poz yeniden açılıyor).
+
+**Doğrulama:** yeni birim testleri (faz birikimi, devasa `dt`) ve uçtan uca
+test (gerçek R15 `LeftHip.Transform` bileşenlerinin 0→6→0→6 hız senaryosunda
+tek karede sıçramaması) eklendi. `npm test` 149/149, `npm run verify` 13/13,
+`MUTATE_ONLY=M51,M52,M53,M54 npm run verify:mutate` 4/4 yakalandı (M51 fazı
+mutlak saate döndürür, M52 blend'i sert eşeğe döndürür, M53/M54 istemci ve
+sunucuyu eski `walk(t,hız)` çağrısına döndürür). Doğrulayıcı ayrıca her iki
+kare döngüsünde `PlayerPose.step()` kullanımını statik olarak denetliyor.
+
+---
+
+## 11. Komut referansı
 
 ```bash
 npm install
-npm test                             # 146 kontrol + kurulum senkronu
+npm test                             # 149 kontrol + kurulum senkronu
 npm run verify                       # 13 entegrasyon kapısı
-npm run verify:mutate                # 50 kusur (~28 dk)
+npm run verify:mutate                # 54 kusur (~28 dk)
 MUTATE_ONLY=M41,M44 npm run verify:mutate  # hızlı alt küme
 npm run trace                        # preview/trace.json (6 senaryo)
 npm run anim                         # preview/anim.json (16 sahne)

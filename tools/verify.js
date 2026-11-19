@@ -1202,6 +1202,16 @@ gate("testler", "Testler: motor + kurulum + sunucu + istemci (spec.luau)", (g) =
   if (!/IsA\(\s*"Motor6D"\s*\).*IsA\(\s*"AnimationConstraint"\s*\)/s.test(humanoidPoseSrc)) {
     g.error("HumanoidPose hem Motor6D hem AnimationConstraint desteklemiyor (AvatarJointUpgrade rigleri hareket etmez)");
   }
+  // "Animasyon ışınlanıyor" kırılması: faz mutlak saat * anlık hız ile
+  // hesaplanırsa hız değişince poz bir karede atlar. Canlı kare döngüleri
+  // PlayerPose.step() ile biriktirilmiş faz kullanmak zorunda.
+  const loopSrc = fs.readFileSync(path.join(ROOT, "src", "server", "SimLoop.server.luau"), "utf8");
+  if (!/PlayerPose\.step\s*\(/.test(viewSrc) || /PlayerPose\.walk\s*\(\s*animClock/.test(viewSrc)) {
+    g.error("istemci yürüyüş fazını biriktirmiyor (PlayerPose.step yerine eski walk(t, hız))");
+  }
+  if (!/PlayerPose\.step\s*\(/.test(loopSrc) || /PlayerPose\.walk\s*\(\s*playerAnimClock/.test(loopSrc)) {
+    g.error("sunucu yürüyüş fazını biriktirmiyor (PlayerPose.step yerine eski walk(t, hız))");
+  }
   const specSrc = fs.readFileSync(path.join(ROOT, "tools", "spec.luau"), "utf8");
   const groups = [...specSrc.matchAll(/print\("\\n== (\d+)\./g)].map((m) => m[1]);
   if (groups.length === 0) g.error("spec.luau'da hiç test grubu başlığı bulunamadı");
