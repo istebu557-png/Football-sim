@@ -740,11 +740,14 @@ local function onFrame(dt)
 	end
 end
 
---[[ KRİTİK ZAMANLAMA: Roblox'un Animator'ı her karede Motor6D.Transform'u
+--[[ KRİTİK ZAMANLAMA: Roblox'un Animator'ı her karede eklem Transform'unu
      PreAnimation sonrası / PreSimulation öncesinde kendi pozlarıyla EZER.
      RenderStepped'de yazılan prosedürel poz bu yüzden ekrana hiç yansımıyordu.
-     Pozu STEPPED içinde (animator güncellemesinden SONRA) yazıyoruz; kamera,
-     HUD ve top yumuşatma RenderStepped'de kalır. ]]
+     Resmî öneri pozu PRE-SIMULATION içinde yazmaktır (Stepped'in yerini aldı);
+     eski oyunlarda olay yoksa Stepped'e düşeriz. Kamera, HUD ve top yumuşatma
+     RenderStepped'de kalır. ]]
+local poseSignal = RunService.PreSimulation or RunService.Stepped
+
 local function onStepped(_dt)
 	if not poseOk or not character or not character.Parent or not hrp or not hrp.Parent then
 		return
@@ -769,7 +772,7 @@ local function onStepped(_dt)
 	end
 end
 
-RunService.Stepped:Connect(onStepped)
+poseSignal:Connect(onStepped)
 RunService.RenderStepped:Connect(onFrame)
 ]=] },
 	["server/SimLoop"] = { class = "Script", source = [=[
@@ -1418,12 +1421,19 @@ local R6_MIN_JOINTS = 4
 -- önbelleğe alınır, karakter hâlâ yükleniyorsa sonraki karede yeniden denenir)
 local cache = setmetatable({}, { __mode = "k" })
 
+-- Yeni R15 avatarlarda Motor6D YOK: StarterPlayer.AvatarJointUpgrade varsayılan
+-- olarak açık olduğundan eklemler AnimationConstraint olur. İkisini de kabul
+-- etmiyoruz; aksi hâlde supported() false döner ve prosedürel poz hiç yazılmaz.
+local function isPoseJoint(obj)
+	return obj ~= nil and (obj:IsA("Motor6D") or obj:IsA("AnimationConstraint"))
+end
+
 local function findMotors(character, maps)
 	local found = {}
 	for _, map in ipairs(maps) do
-		local motor = character:FindFirstChild(map.motor, true)
-		if motor and motor:IsA("Motor6D") then
-			found[#found + 1] = { motor = motor, joint = map.joint }
+		local joint = character:FindFirstChild(map.motor, true)
+		if isPoseJoint(joint) then
+			found[#found + 1] = { motor = joint, joint = map.joint }
 		end
 	end
 	return found

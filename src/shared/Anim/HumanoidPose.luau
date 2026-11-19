@@ -55,12 +55,19 @@ local R6_MIN_JOINTS = 4
 -- önbelleğe alınır, karakter hâlâ yükleniyorsa sonraki karede yeniden denenir)
 local cache = setmetatable({}, { __mode = "k" })
 
+-- Yeni R15 avatarlarda Motor6D YOK: StarterPlayer.AvatarJointUpgrade varsayılan
+-- olarak açık olduğundan eklemler AnimationConstraint olur. İkisini de kabul
+-- etmiyoruz; aksi hâlde supported() false döner ve prosedürel poz hiç yazılmaz.
+local function isPoseJoint(obj)
+	return obj ~= nil and (obj:IsA("Motor6D") or obj:IsA("AnimationConstraint"))
+end
+
 local function findMotors(character, maps)
 	local found = {}
 	for _, map in ipairs(maps) do
-		local motor = character:FindFirstChild(map.motor, true)
-		if motor and motor:IsA("Motor6D") then
-			found[#found + 1] = { motor = motor, joint = map.joint }
+		local joint = character:FindFirstChild(map.motor, true)
+		if isPoseJoint(joint) then
+			found[#found + 1] = { motor = joint, joint = map.joint }
 		end
 	end
 	return found

@@ -215,7 +215,7 @@ const ROBLOX_CLASSES = new Set([
   "SurfaceLight", "Sound", "SoundGroup", "RemoteEvent", "RemoteFunction", "BindableEvent",
   "BindableFunction", "Atmosphere", "Sky", "BlurEffect", "BloomEffect", "ColorCorrectionEffect",
   "DepthOfFieldEffect", "SunRaysEffect", "Camera", "Humanoid", "HumanoidDescription",
-  "Motor6D", "Animation", "AnimationController", "Animator", "Tool", "ClickDetector",
+  "Motor6D", "AnimationConstraint", "Animation", "AnimationController", "Animator", "Tool", "ClickDetector",
   "ProximityPrompt", "BlockMesh", "CylinderMesh", "FileMesh", "SpecialMesh",
   "CharacterMesh", "BodyColors", "Shirt", "Pants", "ShirtGraphic", "Accessory",
   "Decal", "Texture", "Hole", "Motor", "Rotate", "RotateP", "RotateV", "Glue",
@@ -380,7 +380,7 @@ const ROBLOX_MEMBERS = new Set([
   "WorldCFrame", "WorldOrientation", "WorldSecondaryAxis",
   // Remote / sinyal
   "OnServerEvent", "OnClientEvent", "OnServerInvoke", "OnClientInvoke", "Value",
-  "ObjectValue", "Heartbeat", "RenderStepped", "Stepped", "InputBegan", "InputEnded",
+  "ObjectValue", "Heartbeat", "RenderStepped", "PreSimulation", "Stepped", "InputBegan", "InputEnded",
   "InputChanged", "TouchEnabled", "GamepadEnabled", "KeyboardEnabled", "MouseBehavior",
   "MouseIconEnabled", "PlayerAdded", "PlayerRemoving", "LocalPlayer", "Players",
   // Motor6D
@@ -1191,6 +1191,17 @@ gate("testler", "Testler: motor + kurulum + sunucu + istemci (spec.luau)", (g) =
     g.error("test sayısı geriledi: " + specStats.passed + " < " + MIN_TESTS + " (bir grup hiç çalışmıyor olabilir)");
   }
   // Grup listesi spec.luau'dan türetilir: yeni grup eklenince burası kendiliğinden güncellenir
+  // İki gerçek dünya kırılması için statik koruma: testler mock'ta geçse bile
+  // kaynak kod Animator eziminden SONRAKI sinyale ve yeni AnimationConstraint
+  // eklem sınıfına bağlı kalmak zorunda.
+  const viewSrc = fs.readFileSync(path.join(ROOT, "src", "client", "BallView.client.luau"), "utf8");
+  if (!/local\s+poseSignal\s*=\s*RunService\.PreSimulation\s+or\s+RunService\.Stepped/.test(viewSrc)) {
+    g.error("poz döngüsü PreSimulation'a bağlı değil (Animator Transform'u ezer; Stepped yedek kalmalı)");
+  }
+  const humanoidPoseSrc = fs.readFileSync(path.join(ROOT, "src", "shared", "Anim", "HumanoidPose.luau"), "utf8");
+  if (!/IsA\(\s*"Motor6D"\s*\).*IsA\(\s*"AnimationConstraint"\s*\)/s.test(humanoidPoseSrc)) {
+    g.error("HumanoidPose hem Motor6D hem AnimationConstraint desteklemiyor (AvatarJointUpgrade rigleri hareket etmez)");
+  }
   const specSrc = fs.readFileSync(path.join(ROOT, "tools", "spec.luau"), "utf8");
   const groups = [...specSrc.matchAll(/print\("\\n== (\d+)\./g)].map((m) => m[1]);
   if (groups.length === 0) g.error("spec.luau'da hiç test grubu başlığı bulunamadı");
