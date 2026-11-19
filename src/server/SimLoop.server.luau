@@ -140,6 +140,10 @@ local lastKickAt = {}
 -- Şut beklemede OLMASA da karakter pozlanır: eskiden yalnızca şut sırasında
 -- poz yazıldığı için oyuncu "animasyonlar çalışmıyor" diyordu.
 local playerAnimClock = 0
+-- Yürüyüş fazı ve genliği BİRİKTİRİLİR: faz eskiden (mutlak zaman * anlık hız)
+-- ile hesaplanıyordu; hız değişince eklemler bir karede sıçrıyordu. Oyuncu
+-- başına bir state; weak key tablo ayrılan oyuncuları otomatik bırakır.
+local playerPoseState = setmetatable({}, { __mode = "k" })
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 -- ŞUT TAMPONU: menzil dışındaki istek çöpe gitmez, kısa bir pencere bekletilir.
 -- player -> { at = sim.time, charge, aimZ, aimY, shotType, foot }
@@ -429,7 +433,13 @@ RunService.Heartbeat:Connect(function(frameDt)
 				if character and HumanoidPose.supported(character) then
 					local state = playerState(player)
 					local speed = (state and state.speed) or 0 -- m/s (yatay)
-					HumanoidPose.apply(character, PlayerPose.walk(playerAnimClock, speed))
+					local walkState = playerPoseState[player]
+					if not walkState then
+						walkState = PlayerPose.newState()
+						playerPoseState[player] = walkState
+					end
+					HumanoidPose.apply(character,
+						PlayerPose.step(walkState, frameDt, playerAnimClock, speed))
 				end
 			end
 		end

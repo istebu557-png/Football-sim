@@ -71,6 +71,19 @@ local function jointsMoved(a, b)
 	return moved
 end
 
+-- En büyük TEK KARE bileşen değişimi: "ışınlanma" ölçüsü. Sürekli animasyonda
+-- bu değer küçük kalır; faz/genlik sıçramasında bir karede sıçrar.
+local function componentJump(a, b)
+	if not a or not b then
+		return math.huge
+	end
+	local jump = 0
+	for i = 1, 12 do
+		jump = math.max(jump, math.abs(a[i] - b[i]))
+	end
+	return jump
+end
+
 local function near(actual, expected, tol, label)
 	if math.abs(actual - expected) > tol then
 		error(
@@ -1466,6 +1479,53 @@ test("PlayerPose: hiz artinca adim buyur, dururken atletik durusa duser", functi
 		"ready hizli hareketi yuruyuse devretmedi")
 end)
 
+-- KULLANICININ ÜÇÜNCÜ ŞİKAYETİ: "animasyon ışınlanarak gerçekleşiyor".
+-- Eski `walk(t, speed)` fazı mutlak saatten üretiyordu: uzun sure koştuktan
+-- sonra durup tekrar koşmaya başlayınca faz rastgele bir yere atlıyordu.
+test("PlayerPose.step: hiz degisince faz IŞINLAMAZ (birikir)", function()
+	local state = PlayerPose.newState()
+	local dt = 1 / 60
+	local time = 0
+	local prev = nil
+	local maxJump = 0
+	local function advance(speed, seconds)
+		for _ = 1, math.floor(seconds / dt) do
+			time = time + dt
+			local pose = PlayerPose.step(state, dt, time, speed)
+			local hip = pose.hipL or { x = 0, y = 0, z = 0 }
+			local cur = { hip.x, hip.y, hip.z }
+			if prev then
+				for i = 1, 3 do
+					maxJump = math.max(maxJump, math.abs(cur[i] - prev[i]))
+				end
+			end
+			prev = cur
+		end
+	end
+	advance(6.0, 1.5) -- uzun koşu: eski yöntemde t*büyür
+	advance(0.0, 0.6) -- dur: faz donmali, genlik yumuşak inmeli
+	advance(6.0, 1.0) -- tekrar koş: eski yöntemde burada ışınlanıyordu
+	check(maxJump < 0.25, string.format(
+		"kalca bir karede %.3f rad sıçradı (ışınlanma): faz biriktirilmiyor", maxJump))
+
+	-- Testin anlamlı olduğunu kanıtla: aynı senaryoda ESKİ saf fonksiyon sıçrar.
+	local legacyBefore = PlayerPose.walk(2.10, 0)
+	local legacyAfter = PlayerPose.walk(2.10 + dt, 6.0)
+	local bx = legacyBefore.hipL and legacyBefore.hipL.x or 0
+	local ax = legacyAfter.hipL and legacyAfter.hipL.x or 0
+	check(math.abs(ax - bx) > 0.3, string.format(
+		"eski walk() aynı koşulda sıçramadı (%.3f): test kusuru yakalamıyor", ax - bx))
+end)
+
+test("PlayerPose.step: devasa dt fazı yarım döngü ışınlatmaz", function()
+	local state = PlayerPose.newState()
+	local a = PlayerPose.step(state, 1 / 60, 0, 6.0)
+	local b = PlayerPose.step(state, 30, 30, 6.0) -- sekme 30 sn arka planda kaldı
+	local ax = a.hipL and a.hipL.x or 0
+	local bx = b.hipL and b.hipL.x or 0
+	check(math.abs(bx - ax) < 0.3, "devasa dt sonrası kalca bir karede sıçradı")
+end)
+
 test("PlayerPose pozlari R15 karakterine uygulanabiliyor (animasyon gercekten yaziliyor)", function()
 	local mockEnv = RobloxMock.install() -- global Instance/CFrame/Workspace'ü kurar
 	local joints = { "Waist", "Neck", "LeftHip", "LeftKnee", "LeftAnkle", "RightHip", "RightKnee",
@@ -2627,6 +2687,35 @@ test("AvatarJointUpgrade: AnimationConstraint eklemlerine de poz yaziliyor", fun
 	local knee = jointComponents(character, "LeftKnee")
 	check(jointsMoved(knee, { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 }) > 0,
 		"AnimationConstraint eklemlerine poz yazilmadi (oyuncu animasyonu calismiyor)")
+end)
+
+-- Uçtan uca kanıt: hız 0 -> 6 -> 0 -> 6 olurken gerçek R15 Transform'ları
+-- tek karede sıçramıyor. Eski faz formülü burada da kırılıyordu.
+test("oyuncu animasyonu hiz değişiminde IŞINLAMAZ (uçtan uca)", function()
+	local w = bootWorld({ striker = false })
+	check(w.installOk and w.serverOk and w.clientOk,
+		"dunya kurulamadi: " .. tostring(w.installErr or w.serverErr or w.clientErr))
+	local character = w.hrp and w.hrp.Parent
+	check(character ~= nil and character:FindFirstChild("LeftHip") ~= nil, "karakter/eklem yok")
+
+	local idleFrames = stepWorld(w, 0.8)
+	check(#idleFrames.errors == 0, "durus kareleri hata verdi: " .. table.concat(idleFrames.errors, " | "))
+	local prev = jointComponents(character, "LeftHip")
+	local maxJump = 0
+	local function runFrames(speed, seconds)
+		w.hrp.AssemblyLinearVelocity = Vector3.new(speed * STUDS_PER_METER, 0, 0)
+		for _ = 1, math.floor(seconds * 60) do
+			stepWorld(w, 1 / 60)
+			local cur = jointComponents(character, "LeftHip")
+			maxJump = math.max(maxJump, componentJump(prev, cur))
+			prev = cur
+		end
+	end
+	runFrames(6.0, 1.2) -- uzun sure kos
+	runFrames(0.0, 0.6) -- dur
+	runFrames(6.0, 1.0) -- tekrar kos (eski kodda ışınlanma burada)
+	check(maxJump < 0.35, string.format(
+		"LeftHip Transform'u tek karede %.3f değişti (oyuncu ışınlanıyor)", maxJump))
 end)
 
 -- Aynı davranışın SUNUCU tarafı kanıtı: istemci script'i hiç çalışmazken

@@ -89,6 +89,9 @@ local HumanoidPose = loadSharedAnim("HumanoidPose")
 local PlayerPose = loadSharedAnim("PlayerPose")
 local KickAnim = loadSharedAnim("KickAnim")
 local animClock = 0 -- sürekli saat: adım fazı ve nefes için
+-- Adım fazı ve genlik BİRİKTİRİLİR (mutlak saat * anlık hız değil): hız
+-- değiştiğinde poz sıçramaz. Sunucuda her oyuncu için ayrı state tutulur.
+local poseWalkState = PlayerPose and PlayerPose.newState and PlayerPose.newState() or nil
 -- Vuruş pozu için TEK YAZAR kuralı: sunucu şutu beklerken (pending) pozu o
 -- yazar; istemci aynı anda yazarsa iki kaynak aynı eklem için yarışır ve bacak
 -- titrer. İstemci yalnızca iki durumda kendi pozunu yazar:
@@ -289,7 +292,7 @@ local function bindCharacter(char)
 	poseCheckClock = 0
 	refreshPoseSupport(char)
 	poseConn = char.ChildAdded:Connect(function(child)
-		if child:IsA("Motor6D") or child:IsA("Animator") or child.Name == "Animate" then
+		if child:IsA("Motor6D") or child:IsA("AnimationConstraint") or child:IsA("Animator") or child.Name == "Animate" then
 			refreshPoseSupport(char)
 		end
 	end)
@@ -748,26 +751,35 @@ end
      RenderStepped'de kalır. ]]
 local poseSignal = RunService.PreSimulation or RunService.Stepped
 
-local function onStepped(_dt)
+local function onStepped(dt)
 	if not poseOk or not character or not character.Parent or not hrp or not hrp.Parent then
 		return
 	end
+	-- Hız iki kaynaktan: MoveDirection (girdi niyeti) ve kökün gerçek
+	-- hızı (itme/taşınma). Büyük olanı alınır; tek kaynak hızı 0
+	-- gösterdiğinde koşu animasyonu duruşa düşüp "donmuş" görünüyordu.
+	local moveVel = humanoid and humanoid.MoveDirection or Vector3.zero
+	local rootVel = hrp.AssemblyLinearVelocity or Vector3.zero
+	local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s
+	-- State, şut penceresinde de ilerler: sunucu vuruş pozunu yazarken istemci
+	-- poz uygulamasa bile faz birikmeye devam eder; pencere kapanınca yürüyüş
+	-- pozu kaldığı yerden (sıçramadan) devralır.
+	local walkPose = nil
+	if poseWalkState then
+		walkPose = PlayerPose.step(poseWalkState, dt, animClock, speed)
+	end
 	-- Şut penceresi açıkken sunucu yazar (tek yazar kuralı); istemci karışmaz.
 	if animClock >= serverKickUntil then
-		-- Hız iki kaynaktan: MoveDirection (girdi niyeti) ve kökün gerçek
-		-- hızı (itme/taşınma). Büyük olanı alınır; tek kaynak hızı 0
-		-- gösterdiğinde koşu animasyonu duruşa düşüp "donmuş" görünüyordu.
-		local moveVel = humanoid and humanoid.MoveDirection or Vector3.zero
-		local rootVel = hrp.AssemblyLinearVelocity or Vector3.zero
-		local speed = math.max(moveVel.Magnitude, rootVel.Magnitude) / S -- stud/s -> m/s
-		local pose = windupPose or PlayerPose.walk(animClock, speed)
-		local ok = pcall(HumanoidPose.apply, character, pose)
-		if not ok then
-			-- Pozlama bozuldu: karakteri T-pozda DONMUŞ bırakma — varsayılan
-			-- Roblox animasyonunu geri aç ve otomatik yeniden denemeyi bırak.
-			poseOk = false
-			poseSuppressed = true
-			setDefaultAnimateEnabled(character, true)
+		local pose = windupPose or walkPose
+		if pose then
+			local ok = pcall(HumanoidPose.apply, character, pose)
+			if not ok then
+				-- Pozlama bozuldu: karakteri T-pozda DONMUŞ bırakma — varsayılan
+				-- Roblox animasyonunu geri aç ve otomatik yeniden denemeyi bırak.
+				poseOk = false
+				poseSuppressed = true
+				setDefaultAnimateEnabled(character, true)
+			end
 		end
 	end
 end
@@ -918,6 +930,10 @@ local lastKickAt = {}
 -- Şut beklemede OLMASA da karakter pozlanır: eskiden yalnızca şut sırasında
 -- poz yazıldığı için oyuncu "animasyonlar çalışmıyor" diyordu.
 local playerAnimClock = 0
+-- Yürüyüş fazı ve genliği BİRİKTİRİLİR: faz eskiden (mutlak zaman * anlık hız)
+-- ile hesaplanıyordu; hız değişince eklemler bir karede sıçrıyordu. Oyuncu
+-- başına bir state; weak key tablo ayrılan oyuncuları otomatik bırakır.
+local playerPoseState = setmetatable({}, { __mode = "k" })
 local pending = {} -- player -> { t, kick, speed, aimY, aimZ, spin, fired }
 -- ŞUT TAMPONU: menzil dışındaki istek çöpe gitmez, kısa bir pencere bekletilir.
 -- player -> { at = sim.time, charge, aimZ, aimY, shotType, foot }
@@ -1207,7 +1223,13 @@ RunService.Heartbeat:Connect(function(frameDt)
 				if character and HumanoidPose.supported(character) then
 					local state = playerState(player)
 					local speed = (state and state.speed) or 0 -- m/s (yatay)
-					HumanoidPose.apply(character, PlayerPose.walk(playerAnimClock, speed))
+					local walkState = playerPoseState[player]
+					if not walkState then
+						walkState = PlayerPose.newState()
+						playerPoseState[player] = walkState
+					end
+					HumanoidPose.apply(character,
+						PlayerPose.step(walkState, frameDt, playerAnimClock, speed))
 				end
 			end
 		end
@@ -2159,14 +2181,23 @@ return PartRig
 
 	İki kaynak:
 	  WalkCycle.sample(hız, faz, zaman) — koşu/duruş döngüsünün kendisi (fiziksel
-	    adım uzunluğuna bağlı, kayma yok). Bu modül onu SARAR: zamanı hıza göre
-	    faza çevirir, böylece çağıran tarafın adım uzunluğuyla uğraşması gerekmez.
-	  ready — dururken atletik bekleyiş (WalkCycle'ın duruş dalı).
+	    adım uzunluğuna bağlı, kayma yok). Bu modül onu SARAR.
+	  ready — dururken atletik bekleyiş (WalkCycle'ın duruş ucu).
 
-	Kullanım (istemci, kendi karakteri — en güvenilir yol, ağ sahipliği istemcide):
-		HumanoidPose.apply(hrp.Parent, PlayerPose.walk(t, hiz))
-	Kullanım (sunucu, kendi kontrolündeki karakterler):
-		HumanoidPose.apply(model, PlayerPose.walk(t, hiz))
+	ÖNEMLİ (ikinci şikâyet: "animasyon ışınlanarak oluyor"):
+	  Eski `walk(t, speed)` fazı `(t * speed / STRIDE) % 1` ile hesaplıyordu.
+	  `t` mutlak saat olduğu için hız DEĞİŞTİĞİNDE (özellikle durup tekrar
+	  koşmaya başlayınca) faz bir karede rastgele bir yere atlıyordu. Canlı
+	  oyuncular `step()` kullanır: faz her karede `speed * dt` ile biriktirilir,
+	  hız sıçraması poz sıçramasına dönüşmez. Genlik de aynı şekilde yumuşatılır.
+
+	Kullanım (istemci / sunucu, her oyuncu için BİR state):
+		local state = PlayerPose.newState()
+		local pose = PlayerPose.step(state, dt, zaman, hiz)
+		HumanoidPose.apply(character, pose)
+
+	`walk()` / `phaseAt()` yalnızca saf test yardımcıları olarak korunur; canlı
+	kare döngüsünde KULLANILMAMALIDIR.
 
 	Poz sözleşmesi KeeperAnim/KickAnim/WalkCycle ile aynıdır:
 	{ eklemAdı = { x = , y = , z = }, rootOffset = Vec3 }  (Rig uzayı, +z ileri;
@@ -2177,10 +2208,13 @@ local WalkCycle = require(script.Parent.WalkCycle)
 
 local PlayerPose = {}
 
--- Tam salınım genliğine ulaşan hız (m/s). WalkCycle içerde speed/7.6 ile
--- ölçekler; bu sabit yalnızca dışarıya "koşu ne zaman tam koşu olur" bilgisini
--- vermek ve testlerin eşiğini tek yerden okuması için tutulur.
-PlayerPose.FULL_STRIDE_SPEED = 7.6
+-- Tam salınım genliğine ulaşan hız (m/s). WalkCycle içerde speed/FULL_SPEED
+-- ile ölçekler; bu sabit dışarıya "koşu ne zaman tam koşu olur" bilgisini verir.
+PlayerPose.FULL_STRIDE_SPEED = WalkCycle.FULL_SPEED
+
+-- Duruş <-> koşu geçişinin zaman sabiti (s). ~0.15 s, birkaç karede yumuşak
+-- geçiş demektir; daha küçük değer yine gözle görülür sıçrama yapar.
+PlayerPose.BLEND_TAU = 0.15
 
 --[[ Hız -> salınım oranı (0..1). Dururken 0, FULL_STRIDE_SPEED'de 1.
      speed : m/s (işaretli olabilir; büyüklüğü kullanılır) ]]
@@ -2195,41 +2229,64 @@ function PlayerPose.strideAmp(speed)
 	return s / PlayerPose.FULL_STRIDE_SPEED
 end
 
---[[ Zamandan adım fazı üretir (0..1, döner). Faz MESAFEYE bağlıdır: hızlı
-     koşan oyuncu adımlarını sıklaştırır, yavaş yürüyen seyreltir — böylece
-     ayaklar yerde kaymaz.
-     t     : saniye (kesintili olmasın diye sürekli bir saat verilmeli)
-     speed : m/s ]]
+--[[ SAF test yardımcısı: mutlak zamandan faz üretir (ESKİ DAVRANIŞ).
+     Canlı kare döngüsünde kullanma — hız değişince faz sıçrar. ]]
 function PlayerPose.phaseAt(t, speed)
 	local s = math.max(0, speed or 0)
 	if s <= 0 then
 		return 0
 	end
 	local traveled = (t or 0) * s -- metre
-	-- WalkCycle.STRIDE metre = bir tam döngü
 	return (traveled / WalkCycle.STRIDE) % 1
 end
 
---[[ Yürüyüş/koşu pozunu üret. Hız ~0 ise duruşa döner (WalkCycle'ın duruş dalı).
-     t     : saniye
-     speed : m/s
-     Dönüş : poz tablosu ]]
+--[[ SAF test yardımcısı: eski poz üretimi (faz + mutlak zaman).
+     Canlı kare döngüsünde `step()` kullanılır. ]]
 function PlayerPose.walk(t, speed)
 	local time = t or 0
 	local s = math.max(0, speed or 0)
 	return WalkCycle.sample(s, PlayerPose.phaseAt(time, s), time)
 end
 
---[[ Duruş pozunu üret (atletik bekleyiş + nefes). Hız verilirse ve yürüyüş
-     eşiğini geçiyorsa walk'a düşer: çağıran tarafın "duruyor mu" diye
-     düşünmesi gerekmez.
-     t     : saniye (nefes fazı)
-     speed : m/s (isteğe bağlı) ]]
+--[[ Dururkenki atletik bekleyiş + nefes. Hız verilirse ve yürüyüş eşiğini
+     geçiyorsa walk'a düşer (çağıran tarafın hızı kıyaslaması gerekmez). ]]
 function PlayerPose.ready(t, speed)
 	if PlayerPose.strideAmp(speed) > 0.05 then
 		return PlayerPose.walk(t, speed)
 	end
 	return WalkCycle.sample(0, 0, t or 0)
+end
+
+---------------------------------------------------------------- canlı kullanım
+
+-- Her oyuncu/karakter için bir tane. Weak-table değil: çağıran taraf oyuncu
+-- başına tutar (istemcide tek state, sunucuda player -> state eşlemesi).
+function PlayerPose.newState()
+	return { phase = 0, amp = 0 }
+end
+
+--[[ IŞINLANMA ÖNLEYEN kare adımı.
+     state : newState() ile üretilen tablo (oyuncu başına)
+     dt    : bu karenin saniye cinsinden süresi
+     time  : sürekli saat (duruş nefesi için)
+     speed : anlık yatay hız (m/s)
+
+     Faz ve genlik biriktirilir: hız bir karede 0 -> 7 olsa bile eklemler
+     mevcut pozundan KÜÇÜK bir adımla ilerler. ]]
+function PlayerPose.step(state, dt, time, speed)
+	state = state or PlayerPose.newState()
+	-- Sekme arka planda kalınca dt devasa olabilir: 0.1 s ile sınırla, aksi
+	-- halde faz bir karede yarım döngü atlar ve yine "ışınlanma" görünür.
+	local step = math.min(math.max(tonumber(dt) or 0, 0), 0.1)
+	local s = math.max(tonumber(speed) or 0, 0)
+
+	state.phase = (state.phase + s * step / WalkCycle.STRIDE) % 1
+	local target = PlayerPose.strideAmp(s)
+	local alpha = 1 - math.exp(-step / PlayerPose.BLEND_TAU)
+	state.amp = state.amp + (target - state.amp) * alpha
+
+	-- WalkCycle hızı amp olarak bekliyor: amp * FULL_SPEED = amp (0..1) demek.
+	return WalkCycle.sample(state.amp * PlayerPose.FULL_STRIDE_SPEED, state.phase, time)
 end
 
 return PlayerPose
@@ -2550,6 +2607,11 @@ return Rig
 	sekmesi. Adım uzunluğu gerçek mesafeye bağlıdır -> kayma (foot sliding) olmaz.
 
 	faz = kat edilen mesafe / adım döngüsü uzunluğu  (0..1 arası döner)
+
+	ÖNEMLİ: duruş ve yürüyüş ayrı iki poz DEĞİL; aynı pozun iki ucu. Eskiden
+	amp < 0.05 eşiğinde bir daldiği gibi diğerine geçiliyordu: hız bir karede
+	0.04 -> 0.06 olduğunda diz/kalça açıları bir karede sıçrıyor, oyuncu
+	"ışınlanıyormuş" gibi görünüyordu. Artık iki poz sürekli olarak blend edilir.
 ]]
 
 local Ease = require(script.Parent.Ease)
@@ -2559,63 +2621,75 @@ local Vec3 = require(script.Parent.Parent.Core.Vec3)
 local WalkCycle = {}
 
 WalkCycle.STRIDE = 1.9 -- bir tam döngüde kat edilen mesafe (m)
+WalkCycle.FULL_SPEED = 7.6 -- tam salınım genliğine ulaşan hız (m/s)
 
---[[ speed: m/s, phase: 0..1, time: saniye (dururken nefes için) ]]
-function WalkCycle.sample(speed, phase, time)
+-- Dururkenki atletik bekleyiş + nefes. Dizler kırık, gövde hafif öne, kollar
+-- açık: karakter sahada HEYKEL gibi durmasın.
+local function idlePose(time)
 	local pose = Pose.new()
-	local amp = Ease.clamp01(speed / 7.6)
+	local breath = math.sin((time or 0) * 1.8) * 0.5 + 0.5
+	pose.spine = Pose.joint(0.10 + 0.03 * breath, 0, 0)
+	pose.neck = Pose.joint(-0.07, 0, 0)
+	pose.shoulderL = Pose.joint(0.04, 0, 0.26 + 0.03 * breath)
+	pose.shoulderR = Pose.joint(0.04, 0, -0.26 - 0.03 * breath)
+	pose.elbowL = Pose.joint(-0.40, 0, 0)
+	pose.elbowR = Pose.joint(-0.40, 0, 0)
+	pose.kneeL = Pose.joint(0.24 + 0.04 * breath, 0, 0)
+	pose.kneeR = Pose.joint(0.24 + 0.04 * breath, 0, 0)
+	pose.ankleL = Pose.joint(-0.14, 0, 0)
+	pose.ankleR = Pose.joint(-0.14, 0, 0)
+	pose.rootOffset = Vec3.new(0, -0.035 - 0.025 * breath, 0)
+	return pose
+end
+
+-- Tam genlikli adım döngüsü (amp=1). Hız ölçeklemesi sample() içinde yapılır.
+local function stridePose(phase)
+	local pose = Pose.new()
 	local ph = (phase or 0) * math.pi * 2
 	local s = math.sin(ph)
 	local c = math.cos(ph)
 
-	if amp < 0.05 then
-		-- Duruyor: atletik bekleyiş + nefes. Eskiden bu dal neredeyse kimlikle
-		-- aynıydı (knee 0.06, rootOffset -0.005) -> karakter sahada HEYKEL
-		-- gibi duruyordu. Dizler kırık, gövde hafif öne, kollar açık: kaleci
-		-- karşısındaki oyuncunun bekleyişi.
-		local breath = math.sin((time or 0) * 1.8) * 0.5 + 0.5
-		pose.spine = Pose.joint(0.10 + 0.03 * breath, 0, 0)
-		pose.neck = Pose.joint(-0.07, 0, 0)
-		pose.shoulderL = Pose.joint(0.04, 0, 0.26 + 0.03 * breath)
-		pose.shoulderR = Pose.joint(0.04, 0, -0.26 - 0.03 * breath)
-		pose.elbowL = Pose.joint(-0.40, 0, 0)
-		pose.elbowR = Pose.joint(-0.40, 0, 0)
-		pose.kneeL = Pose.joint(0.24 + 0.04 * breath, 0, 0)
-		pose.kneeR = Pose.joint(0.24 + 0.04 * breath, 0, 0)
-		pose.ankleL = Pose.joint(-0.14, 0, 0)
-		pose.ankleR = Pose.joint(-0.14, 0, 0)
-		pose.rootOffset = Vec3.new(0, -0.035 - 0.025 * breath, 0)
-		return pose
-	end
-
 	-- Bacaklar: +hip.x geriye savurur
-	pose.hipL = Pose.joint(0.62 * amp * s, 0, 0)
-	pose.hipR = Pose.joint(-0.62 * amp * s, 0, 0)
+	pose.hipL = Pose.joint(0.62 * s, 0, 0)
+	pose.hipR = Pose.joint(-0.62 * s, 0, 0)
 
 	-- Diz: bacak geriye giderken kırılır (yerden kaldırma)
-	local kneeL = 0.12 + 0.85 * amp * math.max(0, math.sin(ph + 1.2))
-	local kneeR = 0.12 + 0.85 * amp * math.max(0, math.sin(ph + 1.2 + math.pi))
-	pose.kneeL = Pose.joint(kneeL, 0, 0)
-	pose.kneeR = Pose.joint(kneeR, 0, 0)
+	pose.kneeL = Pose.joint(0.12 + 0.85 * math.max(0, math.sin(ph + 1.2)), 0, 0)
+	pose.kneeR = Pose.joint(0.12 + 0.85 * math.max(0, math.sin(ph + 1.2 + math.pi)), 0, 0)
 
 	-- Ayak bileği: topuk-parmak yuvarlanması
-	pose.ankleL = Pose.joint(-0.15 * amp * c, 0, 0)
-	pose.ankleR = Pose.joint(0.15 * amp * c, 0, 0)
+	pose.ankleL = Pose.joint(-0.15 * c, 0, 0)
+	pose.ankleR = Pose.joint(0.15 * c, 0, 0)
 
 	-- Kollar karşılıklı salınır
-	pose.shoulderL = Pose.joint(-0.55 * amp * s, 0, 0.12)
-	pose.shoulderR = Pose.joint(0.55 * amp * s, 0, -0.12)
-	pose.elbowL = Pose.joint(-0.45 - 0.25 * amp * math.max(0, s), 0, 0)
-	pose.elbowR = Pose.joint(-0.45 - 0.25 * amp * math.max(0, -s), 0, 0)
+	pose.shoulderL = Pose.joint(-0.55 * s, 0, 0.12)
+	pose.shoulderR = Pose.joint(0.55 * s, 0, -0.12)
+	pose.elbowL = Pose.joint(-0.45 - 0.25 * math.max(0, s), 0, 0)
+	pose.elbowR = Pose.joint(-0.45 - 0.25 * math.max(0, -s), 0, 0)
 
 	-- Gövde: hafif öne eğik + salınım
-	pose.spine = Pose.joint(0.06 + 0.10 * amp, 0.08 * amp * s, 0)
-	pose.neck = Pose.joint(-0.05 * amp, 0, 0)
+	pose.spine = Pose.joint(0.16, 0.08 * s, 0)
+	pose.neck = Pose.joint(-0.05, 0, 0)
 
 	-- Dikey sekme: her adımda iki kez
-	pose.rootOffset = Vec3.new(0, -0.02 * amp * (0.5 + 0.5 * math.cos(2 * ph)), 0)
-
+	pose.rootOffset = Vec3.new(0, -0.02 * (0.5 + 0.5 * math.cos(2 * ph)), 0)
 	return pose
+end
+
+--[[ speed: m/s, phase: 0..1, time: saniye (dururken nefes için)
+     Genlik sıfırken BİREBİR duruş, birken birebir koşu pozudur; aradaki
+     değerlerde iki poz sürekli karıştırılır (ışınlanma/sıçrama yok). ]]
+function WalkCycle.sample(speed, phase, time)
+	local amp = Ease.clamp01((speed or 0) / WalkCycle.FULL_SPEED)
+	local idle = idlePose(time)
+	if amp <= 0 then
+		return idle
+	end
+	local stride = stridePose(phase)
+	if amp >= 1 then
+		return stride
+	end
+	return Pose.blend(idle, stride, amp)
 end
 
 return WalkCycle

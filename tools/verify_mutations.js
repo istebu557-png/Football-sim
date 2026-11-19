@@ -16,7 +16,7 @@
  *
  * Hız için her vaka yalnızca ilgili kapıyı koşar (VERIFY_ONLY). Tam kanıt:
  *   npm run verify          → 13/13 kapı
- *   npm run verify:mutate   → 50/50 kusur yakalandı
+ *   npm run verify:mutate   → 54/54 kusur yakalandı
  */
 "use strict";
 
@@ -40,6 +40,8 @@ const F = {
   scene: "src/shared/World/SceneBuilder.luau",
   control: "src/shared/Player/BallControl.luau",
   pose: "src/shared/Anim/HumanoidPose.luau",
+  playerPose: "src/shared/Anim/PlayerPose.luau",
+  walkCycle: "src/shared/Anim/WalkCycle.luau",
 };
 
 /** [ad, dosyalar, koşulan kapılar, kaynak → kusurlu kaynak] */
@@ -175,6 +177,22 @@ const CASES = [
     (s) => s.replace("local poseSignal = RunService.PreSimulation or RunService.Stepped",
       "local poseSignal = RunService.Stepped")],
 ];
+
+// ---- "animasyon ışınlanarak gerçekleşiyor" kusur sınıfı (faz/genlik sıçraması) ----
+CASES.push(
+  ["M51 faz mutlak saatten hesaplandı (hız değişince ışınlanma)", [F.playerPose], "testler",
+    (s) => s.replace("state.phase = (state.phase + s * step / WalkCycle.STRIDE) % 1",
+      "state.phase = PlayerPose.phaseAt(time, s)")],
+  ["M52 duruş/koşu blend'i yerine sert eşik (poz bir karede sıçrar)", [F.walkCycle], "testler",
+    (s) => s.replace("return Pose.blend(idle, stride, amp)",
+      "return amp < 0.5 and idle or stride")],
+  ["M53 istemci biriktirilmiş faz yerine eski walk(t,hız) kullandı", [F.view], "testler",
+    (s) => s.replace("walkPose = PlayerPose.step(poseWalkState, dt, animClock, speed)",
+      "walkPose = PlayerPose.walk(animClock, speed)")],
+  ["M54 sunucu biriktirilmiş faz yerine eski walk(t,hız) kullandı", [F.loop], "testler",
+    (s) => s.replace("PlayerPose.step(walkState, frameDt, playerAnimClock, speed)",
+      "PlayerPose.walk(playerAnimClock, speed)")],
+);
 
 function read(rel) {
   return fs.readFileSync(path.join(ROOT, rel), "utf8");
