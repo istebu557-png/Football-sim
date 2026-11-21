@@ -16,9 +16,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const statusBadge = document.getElementById("statusBadge");
   const hostInfo = document.getElementById("hostInfo");
   const pingBtn = document.getElementById("pingBtn");
-  const extIdBox = document.getElementById("extIdBox");
-  const installCmd = document.getElementById("installCmd");
-  const copyIdBtn = document.getElementById("copyIdBtn");
+  const serverUrlInput = document.getElementById("serverUrlInput");
+  const apiTokenInput = document.getElementById("apiTokenInput");
+  const toggleTokenBtn = document.getElementById("toggleTokenBtn");
+  const saveConnBtn = document.getElementById("saveConnBtn");
   const enabledChk = document.getElementById("enabledChk");
   const autoInsertChk = document.getElementById("autoInsertChk");
   const copyPromptBtn = document.getElementById("copyPromptBtn");
@@ -27,10 +28,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function runPing() {
     statusBadge.textContent = "Test ediliyor...";
     statusBadge.className = "pill pill-wait";
-    const res = await sendMsg({ type: "NATIVE_PING" });
+    const res = await sendMsg({ type: "SERVER_PING" });
     if (res && res.ok && res.result) {
       const r = res.result;
-      if (r.workspace_exists) {
+      if (r.full_system_access) {
+        statusBadge.textContent = "Tam Erisim";
+        statusBadge.className = "pill pill-warn";
+      } else if (r.workspace_exists) {
         statusBadge.textContent = "Bagli";
         statusBadge.className = "pill pill-ok";
       } else {
@@ -38,32 +42,50 @@ document.addEventListener("DOMContentLoaded", async () => {
         statusBadge.className = "pill pill-warn";
       }
       hostInfo.textContent = [
-        `Host v${r.host_version} | Python ${r.python_version}`,
-        `Workspace: ${r.workspace_root || "(ayarlanmamis)"}`,
-        `Araclar: ${(r.allowed_tools || []).join(", ")}`,
+        `Server v${r.server_version || r.host_version} | Python ${r.python_version}`,
+        `Mod: ${r.full_system_access ? "Tum Bilgisayar (Tam Erisim)" : "Klasor Kilidi (Jail)"}`,
+        `Varsayilan Dizin: ${r.workspace_root || "(ayarlanmamis)"}`,
         `Config: ${r.config_path}`,
       ].join("\n");
     } else {
-      statusBadge.textContent = "Baglanti Yok";
+      statusBadge.textContent = res && res.authMissing ? "Token Gerekli" : "Baglanti Yok";
       statusBadge.className = "pill pill-err";
-      hostInfo.textContent = (res && res.error) || "Native host baglantisi basarisiz.";
+      hostInfo.textContent = (res && res.error) || "Yerel sunucu baglantisi basarisiz.";
     }
   }
 
   const info = await sendMsg({ type: "GET_EXTENSION_INFO" });
-  if (info && info.ok) {
-    extIdBox.textContent = info.extensionId;
-    installCmd.textContent = `python3 install/install.py --extension-id ${info.extensionId} --workspace /proje/yolunuz`;
-    enabledChk.checked = Boolean(info.settings && info.settings.enabled);
-    autoInsertChk.checked = Boolean(info.settings && info.settings.autoInsertResult);
+  if (info && info.ok && info.settings) {
+    serverUrlInput.value = info.settings.serverUrl || "http://127.0.0.1:38450";
+    apiTokenInput.value = info.settings.apiToken || "";
+    enabledChk.checked = Boolean(info.settings.enabled);
+    autoInsertChk.checked = Boolean(info.settings.autoInsertResult);
   }
 
-  pingBtn.addEventListener("click", runPing);
-
-  copyIdBtn.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(extIdBox.textContent.trim());
-    msgBox.textContent = "Eklenti ID panoya kopyalandi.";
+  toggleTokenBtn.addEventListener("click", () => {
+    const isHidden = apiTokenInput.type === "password";
+    apiTokenInput.type = isHidden ? "text" : "password";
+    toggleTokenBtn.textContent = isHidden ? "Gizle" : "Goster";
   });
+
+  saveConnBtn.addEventListener("click", async () => {
+    const saveRes = await sendMsg({
+      type: "SAVE_SETTINGS",
+      settings: {
+        serverUrl: serverUrlInput.value.trim(),
+        apiToken: apiTokenInput.value.trim(),
+      },
+    });
+    if (!saveRes || !saveRes.ok) {
+      msgBox.textContent = (saveRes && saveRes.error) || "Kaydetme hatasi.";
+      return;
+    }
+    serverUrlInput.value = saveRes.settings.serverUrl;
+    msgBox.textContent = "Baglanti bilgileri kaydedildi.";
+    await runPing();
+  });
+
+  pingBtn.addEventListener("click", runPing);
 
   enabledChk.addEventListener("change", async () => {
     await sendMsg({ type: "SAVE_SETTINGS", settings: { enabled: enabledChk.checked } });

@@ -1,11 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Arena.ai Local Terminal & Tool Bridge",
-  "version": "1.0.0",
-  "description": "Arena.ai sohbet penceresindeki arac ve terminal cagrilarini onayinizla bilgisayarinizda Native Messaging uzerinden calistirir.",
+  "version": "1.2.0",
+  "description": "Arena.ai sohbet penceresindeki arac ve terminal cagrilarini onayinizla yerel localhost sunucusu uzerinden bilgisayarinizda calistirir.",
   "permissions": [
-    "nativeMessaging",
     "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

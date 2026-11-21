@@ -110,13 +110,34 @@ h1 {
 }
 
 .hint code {
-  display: block;
-  margin-top: 3px;
-  padding: 4px 6px;
+  padding: 2px 5px;
   border-radius: 4px;
   background: #020617;
   color: #7dd3fc;
   word-break: break-all;
+}
+
+.field-label {
+  display: block;
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #020617;
+  color: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  outline: none;
+}
+
+.input:focus {
+  border-color: #0ea5e9;
 }
 
 .btn {
