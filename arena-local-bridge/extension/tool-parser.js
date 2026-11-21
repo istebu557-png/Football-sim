@@ -7,34 +7,63 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
-  const SUPPORTED_TOOLS = ["run_command", "read_file", "write_file", "list_dir"];
+  const SUPPORTED_TOOLS = [
+    "run_command",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "delete_path",
+    "list_dir",
+    "terminal_start",
+    "terminal_write",
+    "terminal_read",
+    "terminal_list",
+    "terminal_kill",
+    "open_terminal_window",
+  ];
 
-  const SYSTEM_PROMPT = `Bilgisayarimda yerel arac (tool) ve terminal calistirmak istediginde, her arac cagrisi icin YALNIZCA asagidaki formatta bir \`arena-tool\` kod blogu uret. Birden fazla arac gerekirse adim adim ilerle veya ayri bloklar yaz. Her blok tarafimdan manuel olarak onaylandiktan sonra calistirilacak ve cikti sana \`arena-tool-result\` olarak geri gonderilecektir.
+  const SYSTEM_PROMPT = `Bilgisayarimda yerel arac (tool) ve terminal calistirmak istediginde, her arac cagrisi icin YALNIZCA asagidaki formatta bir \`arena-tool\` kod blogu uret. Her blok tarafimdan manuel olarak onaylandiktan sonra calistirilacak ve cikti sana \`arena-tool-result\` olarak geri gonderilecektir.
 
 Kullanilabilir araclar:
-1. run_command: Terminal komutu calistirir.
-   args: { "command": "string", "cwd": "." (opsiyonel), "timeout": 30 (opsiyonel) }
-2. read_file: Dosya okur.
-   args: { "path": "string", "offset": 1 (opsiyonel), "limit": 200 (opsiyonel) }
-3. write_file: Dosya olusturur/yazar.
+1. run_command: Tek seferlik terminal komutu calistirir.
+   args: { "command": "string", "cwd": "." (veya tam yol), "stdin": "opsiyonel", "timeout": 30 }
+2. terminal_start: Kalici / interaktif terminal oturumu (PTY/shell) baslatir ve session_id doner.
+   args: { "cwd": ".", "command": "opsiyonel baslangic komutu", "wait_ms": 450 }
+3. terminal_write: Acik bir terminal oturumuna komut veya tus girdisi yazar.
+   args: { "session_id": "term_...", "input": "komut", "enter": true, "ctrl": "c|d|z (opsiyonel)", "wait_ms": 500 }
+4. terminal_read: Acik terminal oturumunun yeni ciktilarini okur.
+   args: { "session_id": "term_...", "cursor": 0, "wait_ms": 300 }
+5. terminal_list: Acik terminal oturumlarini listeler.
+   args: {}
+6. terminal_kill: Terminal oturumunu kapatir.
+   args: { "session_id": "term_..." }
+7. open_terminal_window: Masaustunde gercek bir terminal penceresi acar.
+   args: { "command": "opsiyonel komut", "cwd": ".", "keep_open": true }
+8. read_file: Dosya okur.
+   args: { "path": "string", "offset": 1, "limit": 200 }
+9. write_file: Dosya olusturur veya uzerine yazar.
    args: { "path": "string", "content": "string", "create_dirs": true }
-4. list_dir: Klasor icerigini listeler.
-   args: { "path": "." (opsiyonel), "include_hidden": false }
+10. edit_file: Mevcut dosyada metin degistirir.
+    args: { "path": "string", "old_text": "string", "new_text": "string", "replace_all": false }
+11. delete_path: Dosya veya klasor siler.
+    args: { "path": "string", "recursive": false }
+12. list_dir: Klasor icerigini listeler.
+    args: { "path": ".", "include_hidden": false }
 
 Ornek format:
 \`\`\`arena-tool
 {
   "id": "call_1",
-  "tool": "run_command",
+  "tool": "terminal_start",
   "args": {
-    "command": "git status",
-    "cwd": "."
+    "cwd": "~"
   }
 }
 \`\`\`
 
 Kurallar:
 - Yalnizca gecerli JSON yaz (yorum satiri veya trailing comma kullanma).
+- Etkilesimli surecler (or. dev server, python REPL, ssh, ardisik cd komutlari) icin \`terminal_start\` + \`terminal_write\` + \`terminal_read\` kullan.
 - Komut sonucunu uydurma; sonucu kullanicidan bekle.`;
 
   /**
@@ -60,7 +89,6 @@ Kurallar:
 
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
 
-    // Require explicit language tag OR explicit marker property so ordinary JSON blocks are never misread as tool calls
     const hasMarker = parsed.__arena_tool__ === true || parsed.arena_tool === true;
     if (!isExplicitTag && !hasMarker) {
       return null;
@@ -84,7 +112,6 @@ Kurallar:
       };
     }
 
-    // Per-tool required arg validation
     if (tool === "run_command" && (typeof args.command !== "string" || !args.command.trim())) {
       return {
         valid: false,
@@ -92,7 +119,10 @@ Kurallar:
         raw: trimmed,
       };
     }
-    if ((tool === "read_file" || tool === "write_file") && (typeof args.path !== "string" || !args.path.trim())) {
+    if (
+      (tool === "read_file" || tool === "write_file" || tool === "edit_file" || tool === "delete_path") &&
+      (typeof args.path !== "string" || !args.path.trim())
+    ) {
       return {
         valid: false,
         error: `${tool} icin 'args.path' gerekli.`,
@@ -105,6 +135,31 @@ Kurallar:
         error: "write_file icin 'args.content' (string) gerekli.",
         raw: trimmed,
       };
+    }
+    if (tool === "edit_file" && (typeof args.old_text !== "string" || !args.old_text || typeof args.new_text !== "string")) {
+      return {
+        valid: false,
+        error: "edit_file icin 'args.old_text' ve 'args.new_text' gerekli.",
+        raw: trimmed,
+      };
+    }
+    if (
+      (tool === "terminal_read" || tool === "terminal_kill") &&
+      (typeof args.session_id !== "string" || !args.session_id.trim())
+    ) {
+      return {
+        valid: false,
+        error: `${tool} icin 'args.session_id' gerekli.`,
+        raw: trimmed,
+      };
+    }
+    if (tool === "terminal_write") {
+      if (typeof args.session_id !== "string" || !args.session_id.trim()) {
+        return { valid: false, error: "terminal_write icin 'args.session_id' gerekli.", raw: trimmed };
+      }
+      if (typeof args.input !== "string" && typeof args.ctrl !== "string") {
+        return { valid: false, error: "terminal_write icin 'args.input' veya 'args.ctrl' gerekli.", raw: trimmed };
+      }
     }
 
     const id =

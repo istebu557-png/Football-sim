@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import socket
 import struct
 import subprocess
 import sys
@@ -42,15 +43,40 @@ class NativeHostTest(unittest.TestCase):
         self.write_config(
             {
                 "workspace_root": str(self.workspace),
-                "allowed_tools": ["ping", "list_dir", "read_file", "write_file", "run_command"],
+                "full_system_access": False,
+                "allowed_tools": [
+                    "ping",
+                    "list_dir",
+                    "read_file",
+                    "write_file",
+                    "edit_file",
+                    "delete_path",
+                    "run_command",
+                    "terminal_start",
+                    "terminal_write",
+                    "terminal_read",
+                    "terminal_list",
+                    "terminal_kill",
+                    "open_terminal_window",
+                ],
                 "default_timeout_sec": 5,
-                "max_output_bytes": 1024,
+                "max_output_bytes": 4096,
                 "max_read_bytes": 4096,
                 "lock_workspace": True,
             }
         )
 
     def tearDown(self) -> None:
+        daemon_json = self.data_dir / "daemon.json"
+        if daemon_json.is_file():
+            try:
+                info = json.loads(daemon_json.read_text(encoding="utf-8"))
+                payload = (json.dumps({"token": info["token"], "action": "shutdown", "args": {}}) + "\n").encode("utf-8")
+                with socket.create_connection(("127.0.0.1", int(info["port"])), timeout=2) as sock:
+                    sock.sendall(payload)
+                    sock.recv(1024)
+            except Exception:
+                pass
         self.tmp.cleanup()
 
     def write_config(self, cfg: dict) -> None:
@@ -67,7 +93,7 @@ class NativeHostTest(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
-            timeout=20,
+            timeout=25,
             check=False,
         )
         self.assertEqual(proc.returncode, 0, msg=f"Host stderr: {proc.stderr.decode('utf-8', 'replace')}")
@@ -81,34 +107,58 @@ class NativeHostTest(unittest.TestCase):
                 "tool": "write_file",
                 "args": {"path": "sub/hello.txt", "content": "line1\nline2\nline3\n"},
             },
-            {"id": "3", "tool": "read_file", "args": {"path": "sub/hello.txt", "offset": 2, "limit": 1}},
-            {"id": "4", "tool": "list_dir", "args": {"path": "."}},
+            {
+                "id": "3",
+                "tool": "edit_file",
+                "args": {"path": "sub/hello.txt", "old_text": "line2", "new_text": "line2_edited"},
+            },
+            {"id": "4", "tool": "read_file", "args": {"path": "sub/hello.txt", "offset": 2, "limit": 1}},
+            {"id": "5", "tool": "list_dir", "args": {"path": "."}},
+            {"id": "6", "tool": "delete_path", "args": {"path": "sub/hello.txt"}},
         )
-        self.assertEqual(len(res), 4)
+        self.assertEqual(len(res), 6)
         self.assertTrue(res[0]["ok"])
         self.assertTrue(res[0]["result"]["workspace_exists"])
+        self.assertFalse(res[0]["result"]["full_system_access"])
 
         self.assertTrue(res[1]["ok"])
         self.assertEqual(res[1]["result"]["path"], "sub/hello.txt")
 
         self.assertTrue(res[2]["ok"])
-        self.assertEqual(res[2]["result"]["content"], "line2\n")
-        self.assertEqual(res[2]["result"]["total_lines"], 3)
+        self.assertEqual(res[2]["result"]["replacements"], 1)
 
         self.assertTrue(res[3]["ok"])
-        names = [e["name"] for e in res[3]["result"]["entries"]]
+        self.assertEqual(res[3]["result"]["content"], "line2_edited\n")
+        self.assertEqual(res[3]["result"]["total_lines"], 3)
+
+        self.assertTrue(res[4]["ok"])
+        names = [e["name"] for e in res[4]["result"]["entries"]]
         self.assertIn("sub", names)
 
-    def test_run_command_and_truncation(self) -> None:
+        self.assertTrue(res[5]["ok"])
+        self.assertTrue(res[5]["result"]["deleted"])
+
+    def test_run_command_stdin_and_truncation(self) -> None:
         res = self.call_host(
             {
-                "id": "cmd1",
+                "id": "cmd_stdin",
                 "tool": "run_command",
-                "args": {"command": f'"{sys.executable}" -c "print(\'A\' * 4000)"'},
-            }
+                "args": {
+                    "command": f'"{sys.executable}" -c "import sys; print(sys.stdin.read().upper())"',
+                    "stdin": "merhaba arena",
+                },
+            },
+            {
+                "id": "cmd_trunc",
+                "tool": "run_command",
+                "args": {"command": f'"{sys.executable}" -c "print(\'A\' * 8000)"'},
+            },
         )
         self.assertTrue(res[0]["ok"])
-        r = res[0]["result"]
+        self.assertIn("MERHABA ARENA", res[0]["result"]["stdout"])
+
+        self.assertTrue(res[1]["ok"])
+        r = res[1]["result"]
         self.assertEqual(r["exit_code"], 0)
         self.assertTrue(r["truncated"])
         self.assertIn("truncated", r["stdout"])
@@ -151,6 +201,63 @@ class NativeHostTest(unittest.TestCase):
             self.assertFalse(item["ok"], msg=f"Expected failure for {item}")
             self.assertIn("Guvenlik engeli", item["error"])
 
+    def test_full_system_access_allows_paths_outside_workspace(self) -> None:
+        outside_dir = self.tmp_path / "outside_pc"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "note.txt"
+
+        cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+        cfg["full_system_access"] = True
+        self.write_config(cfg)
+
+        res = self.call_host(
+            {"id": "p1", "tool": "ping", "args": {}},
+            {"id": "w1", "tool": "write_file", "args": {"path": str(outside_file), "content": "global-ok"}},
+            {"id": "r1", "tool": "read_file", "args": {"path": str(outside_file)}},
+            {"id": "c1", "tool": "run_command", "args": {"command": "pwd", "cwd": str(outside_dir)}},
+        )
+        self.assertTrue(res[0]["result"]["full_system_access"])
+        self.assertTrue(res[1]["ok"])
+        self.assertEqual(res[2]["result"]["content"], "global-ok")
+        self.assertTrue(res[3]["ok"])
+        self.assertIn("outside_pc", res[3]["result"]["stdout"])
+
+    def test_persistent_interactive_terminal_session(self) -> None:
+        start_res = self.call_host(
+            {"id": "ts1", "tool": "terminal_start", "args": {"cwd": ".", "wait_ms": 250}}
+        )[0]
+        self.assertTrue(start_res["ok"], msg=start_res)
+        sid = start_res["result"]["session_id"]
+        self.assertTrue(start_res["result"]["alive"])
+
+        # State persists across separate host invocations!
+        write1 = self.call_host(
+            {
+                "id": "tw1",
+                "tool": "terminal_write",
+                "args": {"session_id": sid, "input": "export ARENA_TEST_VAR=4242", "wait_ms": 250},
+            }
+        )[0]
+        self.assertTrue(write1["ok"], msg=write1)
+
+        write2 = self.call_host(
+            {
+                "id": "tw2",
+                "tool": "terminal_write",
+                "args": {"session_id": sid, "input": "echo VAL=$ARENA_TEST_VAR", "wait_ms": 300},
+            }
+        )[0]
+        self.assertTrue(write2["ok"], msg=write2)
+        self.assertIn("VAL=4242", write2["result"]["output"])
+
+        listed = self.call_host({"id": "tl1", "tool": "terminal_list", "args": {}})[0]
+        self.assertTrue(listed["ok"])
+        self.assertTrue(any(s["session_id"] == sid and s["alive"] for s in listed["result"]["sessions"]))
+
+        killed = self.call_host({"id": "tk1", "tool": "terminal_kill", "args": {"session_id": sid}})[0]
+        self.assertTrue(killed["ok"])
+        self.assertTrue(killed["result"]["killed"])
+
     def test_disabled_tool_rejected(self) -> None:
         self.write_config(
             {
@@ -162,7 +269,7 @@ class NativeHostTest(unittest.TestCase):
         self.assertFalse(res[0]["ok"])
         self.assertIn("devre disi", res[0]["error"])
 
-    def test_installer_writes_manifest_and_config(self) -> None:
+    def test_installer_writes_manifest_and_full_access_config(self) -> None:
         if os.name == "nt":
             self.skipTest("Unix manifest dir test")
         native_dir = self.tmp_path / "native_hosts"
@@ -174,8 +281,7 @@ class NativeHostTest(unittest.TestCase):
                 str(INSTALL_PY),
                 "--extension-id",
                 ext_id,
-                "--workspace",
-                str(self.workspace),
+                "--full-access",
                 "--native-dir",
                 str(native_dir),
                 "--data-dir",
@@ -191,7 +297,9 @@ class NativeHostTest(unittest.TestCase):
         self.assertTrue(manifest_file.is_file())
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         self.assertEqual(manifest["allowed_origins"], [f"chrome-extension://{ext_id}/"])
-        self.assertTrue((data_dir / "config.json").is_file())
+        cfg = json.loads((data_dir / "config.json").read_text(encoding="utf-8"))
+        self.assertTrue(cfg["full_system_access"])
+        self.assertIn("terminal_write", cfg["allowed_tools"])
 
 
 if __name__ == "__main__":

@@ -30,7 +30,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const res = await sendMsg({ type: "NATIVE_PING" });
     if (res && res.ok && res.result) {
       const r = res.result;
-      if (r.workspace_exists) {
+      if (r.full_system_access) {
+        statusBadge.textContent = "Tam Erisim";
+        statusBadge.className = "pill pill-warn";
+      } else if (r.workspace_exists) {
         statusBadge.textContent = "Bagli";
         statusBadge.className = "pill pill-ok";
       } else {
@@ -39,7 +42,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
       hostInfo.textContent = [
         `Host v${r.host_version} | Python ${r.python_version}`,
-        `Workspace: ${r.workspace_root || "(ayarlanmamis)"}`,
+        `Mod: ${r.full_system_access ? "Tum Bilgisayar (Tam Erisim)" : "Klasor Kilidi (Jail)"}`,
+        `Varsayilan Dizin: ${r.workspace_root || "(ayarlanmamis)"}`,
         `Araclar: ${(r.allowed_tools || []).join(", ")}`,
         `Config: ${r.config_path}`,
       ].join("\n");
@@ -53,7 +57,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const info = await sendMsg({ type: "GET_EXTENSION_INFO" });
   if (info && info.ok) {
     extIdBox.textContent = info.extensionId;
-    installCmd.textContent = `python3 install/install.py --extension-id ${info.extensionId} --workspace /proje/yolunuz`;
+    installCmd.textContent = `python3 install/install.py --extension-id ${info.extensionId} --full-access`;
     enabledChk.checked = Boolean(info.settings && info.settings.enabled);
     autoInsertChk.checked = Boolean(info.settings && info.settings.autoInsertResult);
   }

@@ -17,6 +17,22 @@ from typing import Dict, List
 HOST_NAME = "com.arena.local_bridge"
 EXT_ID_RE = re.compile(r"^[a-p]{32}$")
 
+ALL_TOOLS = [
+    "ping",
+    "list_dir",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "delete_path",
+    "run_command",
+    "terminal_start",
+    "terminal_write",
+    "terminal_read",
+    "terminal_list",
+    "terminal_kill",
+    "open_terminal_window",
+]
+
 LINUX_DIRS: Dict[str, Path] = {
     "chrome": Path.home() / ".config/google-chrome/NativeMessagingHosts",
     "chromium": Path.home() / ".config/chromium/NativeMessagingHosts",
@@ -47,22 +63,25 @@ def get_data_dir() -> Path:
     return Path.home() / ".arena-local-bridge"
 
 
-def write_config(workspace_root: Path, data_dir: Path) -> Path:
+def write_config(workspace_root: Path, data_dir: Path, full_system_access: bool) -> Path:
     data_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = data_dir / "config.json"
     config = {
         "workspace_root": str(workspace_root),
-        "allowed_tools": ["ping", "list_dir", "read_file", "write_file", "run_command"],
+        "full_system_access": full_system_access,
+        "allowed_tools": list(ALL_TOOLS),
         "default_timeout_sec": 30,
         "max_output_bytes": 32768,
         "max_read_bytes": 131072,
-        "lock_workspace": True,
+        "lock_workspace": not full_system_access,
     }
     if cfg_path.is_file():
         try:
             existing = json.loads(cfg_path.read_text(encoding="utf-8"))
             if isinstance(existing, dict):
                 existing["workspace_root"] = str(workspace_root)
+                existing["full_system_access"] = full_system_access
+                existing["allowed_tools"] = list(dict.fromkeys(list(existing.get("allowed_tools") or []) + ALL_TOOLS))
                 config = {**config, **existing}
         except Exception:
             pass
@@ -126,7 +145,17 @@ def install_windows(host_py: Path, extension_id: str, browser: str, data_dir: Pa
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Arena.ai Local Bridge Native Messaging Kurulumu")
     p.add_argument("--extension-id", help="Chrome Eklenti ID (32 karakterlik a-p dizesi)")
-    p.add_argument("--workspace", help="Araclarin calisabilecegi izinli proje klasoru")
+    p.add_argument("--workspace", help="Varsayilan calisma klasoru (full-access ile varsayilan: ev dizini)")
+    p.add_argument(
+        "--full-access",
+        action="store_true",
+        help="Tum bilgisayara erisim modunu acar (klasor sinirlamasini kaldirir)",
+    )
+    p.add_argument(
+        "--restricted",
+        action="store_true",
+        help="Yalnizca workspace klasoru icinde calismaya izin verir (Workspace Jail)",
+    )
     p.add_argument(
         "--browser",
         choices=["all", "chrome", "chromium", "brave", "edge"],
@@ -153,9 +182,26 @@ def main() -> int:
         )
         return 1
 
+    if args.full_access and args.restricted:
+        print("[HATA] --full-access ve --restricted ayni anda kullanilamaz.", file=sys.stderr)
+        return 1
+
+    if args.full_access:
+        full_access = True
+    elif args.restricted:
+        full_access = False
+    elif args.workspace:
+        full_access = False
+    else:
+        ans = input("Tum bilgisayara erisim acilsin mi? (e=Tam Erisim, h=Tek Klasor) [e]: ").strip().lower()
+        full_access = ans in ("", "e", "evet", "y", "yes")
+
     ws_raw = (args.workspace or "").strip()
     if not ws_raw:
-        ws_raw = input("Izin verilen calisma klasoru (workspace_root) yolu: ").strip()
+        if full_access:
+            ws_raw = str(Path.home())
+        else:
+            ws_raw = input("Izin verilen calisma klasoru (workspace_root) yolu: ").strip()
     if not ws_raw:
         print("[HATA] workspace yolu bos olamaz.", file=sys.stderr)
         return 1
@@ -171,19 +217,23 @@ def main() -> int:
         return 1
 
     data_dir = Path(args.data_dir).expanduser().resolve() if args.data_dir else get_data_dir()
-    cfg_path = write_config(workspace_root, data_dir)
+    cfg_path = write_config(workspace_root, data_dir, full_system_access=full_access)
 
     if os.name == "nt":
         locs = install_windows(host_py, ext_id, args.browser, data_dir)
     else:
         os.chmod(host_py, 0o755)
+        daemon_py = host_py.parent / "terminal_daemon.py"
+        if daemon_py.exists():
+            os.chmod(daemon_py, 0o755)
         manifest = build_manifest(host_py, ext_id)
         custom_dir = Path(args.native_dir).expanduser().resolve() if args.native_dir else None
         locs = [str(p) for p in install_unix(manifest, args.browser, custom_dir)]
 
     print("\nKurulum tamamlandi!")
+    print(f"  Erisim modu    : {'TUM BILGISAYAR (Tam Erisim)' if full_access else 'Klasor Kilidi (Workspace Jail)'}")
     print(f"  Config dosyasi : {cfg_path}")
-    print(f"  Workspace root : {workspace_root}")
+    print(f"  Varsayilan cwd : {workspace_root}")
     print(f"  Native Host    : {host_py}")
     print("  Kayit noktasi  :")
     for loc in locs:

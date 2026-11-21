@@ -1,8 +1,8 @@
 # Arena.ai Local Terminal & Tool Bridge (Seçenek 2A — Chrome Native Messaging)
 
-Arena.ai sohbet penceresinde modelin ürettiği araç ve terminal çağrılarını (`arena-tool` bloklarını), **manuel onayınızla** kendi bilgisayarınızdaki izinli proje klasörü içinde çalıştıran Chrome Manifest V3 eklentisi ve yerel Native Messaging köprüsüdür.
+Arena.ai sohbet penceresinde modelin ürettiği araç ve terminal çağrılarını (`arena-tool` bloklarını), **manuel onayınızla** bilgisayarınızda çalıştıran Chrome Manifest V3 eklentisi ve yerel Native Messaging köprüsüdür.
 
-Açık HTTP/WebSocket portu bırakmaz; Chrome'un yerel `stdin/stdout` **Native Messaging** protokolünü kullanır.
+Açık genel ağ portu bırakmaz; Chrome'un yerel `stdin/stdout` **Native Messaging** protokolünü kullanır. Kalıcı interaktif terminal oturumları için arka planda yalnızca `127.0.0.1` üzerinde token doğrulamalı yerel `terminal_daemon.py` çalışır.
 
 ---
 
@@ -19,15 +19,29 @@ arena-local-bridge/
 │   ├── popup.html / .js / .css
 │   └── icons/
 ├── native-host/
-│   └── host.py             # Saf Python 3 Native Messaging sunucusu (bağımlılıksız)
+│   ├── host.py             # Saf Python 3 Native Messaging sunucusu
+│   └── terminal_daemon.py  # Kalıcı PTY / interaktif terminal yöneticisi
 ├── install/
 │   ├── install.py          # Windows / macOS / Linux kurulum betiği
 │   ├── uninstall.py
 │   └── com.arena.local_bridge.template.json
 └── tests/
-    ├── test_host.py        # Uçtan uca Native Host + güvenlik testleri
+    ├── test_host.py        # Uçtan uca Native Host + terminal + güvenlik testleri
     └── test_parser.js      # JS parser birim testleri
 ```
+
+---
+
+## Desteklenen Araçlar
+
+- **Tek seferlik komut:** `run_command` (opsiyonel `stdin`, `cwd`, `timeout`)
+- **Kalıcı / İnteraktif Terminal (PTY/Shell):**
+  - `terminal_start` — arka planda gerçek bir etkileşimli terminal oturumu başlatır (`session_id` döner).
+  - `terminal_write` — açık terminale komut/metin yazar veya `Ctrl+C` (`ctrl: "c"`) gönderir, yeni çıktıyı döner.
+  - `terminal_read` — açık terminalden yeni çıktıları okur.
+  - `terminal_list` / `terminal_kill` — açık terminalleri listeler / kapatır.
+- **Masaüstü Terminal Penceresi:** `open_terminal_window` — işletim sisteminizde gerçek bir görünür terminal penceresi açar (`wt.exe`/`cmd.exe`, `Terminal.app`, `gnome-terminal`/`konsole`/`xterm` vb.).
+- **Dosya Sistemi:** `list_dir`, `read_file`, `write_file`, `edit_file`, `delete_path`.
 
 ---
 
@@ -37,56 +51,38 @@ arena-local-bridge/
 1. Chrome'da `chrome://extensions` adresini açın.
 2. Sağ üstten **Geliştirici modu (Developer mode)** anahtarını açın.
 3. **Paketlenmemiş öğe yükle (Load unpacked)** butonuna basın ve `arena-local-bridge/extension` klasörünü seçin.
-4. Yüklenen eklentinin **ID** değerini kopyalayın (veya eklenti simgesine tıklayıp popup içindeki **Kopyala** butonunu kullanın).
+4. Eklentinin **ID** değerini kopyalayın.
 
 ### 2. Native Messaging Host'u Kaydedin
-Terminali açıp `arena-local-bridge` klasöründe şu komutu çalıştırın:
 
+**Tüm bilgisayara erişim (Tam Erişim modu):**
 ```bash
 python3 install/install.py \
   --extension-id <32_KARAKTERLIK_EKLENTI_ID> \
-  --workspace /calismak/istediginiz/proje/klasoru
+  --full-access
+```
+
+**Yalnızca belirli bir klasöre kısıtlı mod (Workspace Jail):**
+```bash
+python3 install/install.py \
+  --extension-id <32_KARAKTERLIK_EKLENTI_ID> \
+  --restricted \
+  --workspace /proje/yolunuz
 ```
 
 > Windows'ta `python` veya `py -3` kullanabilirsiniz. Kurulum betiği Windows için `host_wrapper.bat` + Registry kaydını, Linux/macOS için `NativeMessagingHosts/com.arena.local_bridge.json` dosyasını otomatik oluşturur.
 
 ### 3. Bağlantıyı Test Edin
 1. Chrome araç çubuğundan **Arena Local Bridge** simgesine tıklayın.
-2. **Bağlantıyı Test Et (Ping)** ile `Bağlı` durumunu ve aktif `Workspace` yolunu doğrulayın.
+2. **Bağlantıyı Test Et (Ping)** ile erişim modunu (`Tam Erisim` veya `Bagli`) doğrulayın.
 
 ---
 
-## Arena.ai Üzerinde Kullanım
+## Güvenlik Notları
 
-1. `https://arena.ai` sohbet sayfasını açın (sağ altta **Local Bridge Bağlı** paneli görünür).
-2. Paneldeki **Sistem Promptu Kopyala** veya **Sohbete Yapıştır** butonunu kullanarak sohbetin başında modele araç formatını bildirin.
-3. Model aşağıdaki gibi bir blok ürettiğinde, altında otomatik olarak **Onayla ve Çalıştır / Reddet** kartı çıkar:
-
-````markdown
-```arena-tool
-{
-  "id": "call_1",
-  "tool": "run_command",
-  "args": {
-    "command": "git status",
-    "cwd": "."
-  }
-}
-```
-````
-
-4. **Onayla ve Çalıştır** dediğinizde komut bilgisayarınızdaki `workspace_root` içinde çalışır.
-5. Çıktıyı inceledikten sonra **Sohbete Ekle** butonuna basarak sonucu `arena-tool-result` bloğu olarak sohbet kutusuna yerleştirebilir ve gönderebilirsiniz.
-
----
-
-## Güvenlik Özellikleri
-
-- **Sıfır Otomatik Çalıştırma:** Hiçbir araç kullanıcı onayı olmadan çalışmaz.
-- **Workspace Jail:** Tüm dosya okuma/yazma ve komut `cwd` yolları `os.path.realpath` + `os.path.commonpath` ile kontrol edilir; `../` veya sembolik bağ ile `workspace_root` dışına çıkılamaz.
-- **Zaman Aşımı & Süreç Grubu Temizliği:** `run_command` zaman aşımına uğrarsa alt süreçlerle birlikte sonlandırılır (`default_timeout_sec: 30`, maks `300`).
-- **Denetim Kaydı:** Çalıştırılan tüm araçlar `~/.arena-local-bridge/audit.log` dosyasına kaydedilir.
-- **Konfigürasyon Kilidi:** `~/.arena-local-bridge/config.json` içinden `allowed_tools` listesini kısıtlayabilir (ör. `write_file` veya `run_command`'ı kapatabilirsiniz).
+- **Her çağrıda manuel onay:** Hiçbir komut veya dosya işlemi **Onayla ve Çalıştır** butonuna basılmadan çalışmaz.
+- **Tam Erişim vs Klasör Kilidi:** `~/.arena-local-bridge/config.json` içindeki `full_system_access` (`true`/`false`) ve `allowed_tools` alanlarıyla yetkileri dilediğiniz zaman düzenleyebilirsiniz.
+- **Denetim Kaydı:** Tüm çalıştırılan işlemler `~/.arena-local-bridge/audit.log` dosyasına kaydedilir.
 
 ---
 

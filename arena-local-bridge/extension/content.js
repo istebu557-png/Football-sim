@@ -140,8 +140,26 @@
         return `Dosya oku: ${args.path}${args.offset ? ` (satir ${args.offset}+)` : ""}`;
       case "write_file":
         return `Dosya yaz: ${args.path} (${(args.content || "").length} karakter)`;
+      case "edit_file":
+        return `Dosya duzenle: ${args.path}`;
+      case "delete_path":
+        return `Sil: ${args.path}${args.recursive ? " (recursive)" : ""}`;
       case "list_dir":
         return `Klasor listele: ${args.path || "."}`;
+      case "terminal_start":
+        return `Terminal oturumu baslat${args.cwd ? ` (cwd: ${args.cwd})` : ""}${args.command ? `: ${args.command}` : ""}`;
+      case "terminal_write":
+        return args.ctrl
+          ? `Terminale tus gonder [${args.session_id}]: Ctrl+${String(args.ctrl).toUpperCase()}`
+          : `Terminale yaz [${args.session_id}]: ${args.input}`;
+      case "terminal_read":
+        return `Terminal ciktisi oku [${args.session_id}]`;
+      case "terminal_list":
+        return "Acik terminal oturumlarini listele";
+      case "terminal_kill":
+        return `Terminal oturumunu kapat [${args.session_id}]`;
+      case "open_terminal_window":
+        return `Masaustu terminali ac${args.cwd ? ` (cwd: ${args.cwd})` : ""}${args.command ? `: ${args.command}` : ""}`;
       default:
         return JSON.stringify(args);
     }
@@ -160,11 +178,33 @@
       if (!r.stdout && !r.stderr) parts.push("(Cikti yok)");
       return parts.join("\n");
     }
+    if (r.tool === "terminal_start" || r.tool === "terminal_write" || r.tool === "terminal_read") {
+      const state = r.alive ? "ACIK" : `KAPALI (exit=${r.exit_code})`;
+      return `[${r.session_id}] ${state} | cursor=${r.cursor}\n${r.output || "(Yeni cikti yok)"}`;
+    }
+    if (r.tool === "terminal_list") {
+      const rows = (r.sessions || []).map(
+        (s) => `${s.session_id} | pid=${s.pid} | ${s.alive ? "ACIK" : `KAPALI (${s.exit_code})`} | ${s.cwd}`
+      );
+      return rows.length ? rows.join("\n") : "(Acik terminal oturumu yok)";
+    }
+    if (r.tool === "terminal_kill") {
+      return `Terminal kapatildi: ${r.session_id}`;
+    }
+    if (r.tool === "open_terminal_window") {
+      return `Masaustu terminal penceresi acildi (${r.launcher}) | CWD: ${r.cwd}`;
+    }
     if (r.tool === "read_file") {
       return `Dosya: ${r.path} (${r.total_lines} satir, donen: ${r.lines_returned})\n\n${r.content || ""}`;
     }
     if (r.tool === "write_file") {
       return `Yazildi: ${r.path} (${r.bytes_written} byte)`;
+    }
+    if (r.tool === "edit_file") {
+      return `Duzenlendi: ${r.path} (${r.replacements} degisiklik)`;
+    }
+    if (r.tool === "delete_path") {
+      return `Silindi (${r.type}): ${r.path}`;
     }
     if (r.tool === "list_dir") {
       const lines = (r.entries || []).map((e) => `${e.type === "dir" ? "[DIR] " : "      "}${e.name}${e.type === "file" ? ` (${e.size} B)` : ""}`);
@@ -189,11 +229,19 @@
       return card;
     }
 
-    const isDangerous = call.tool === "run_command" || call.tool === "write_file";
+    const isCritical = call.tool === "delete_path";
+    const isDangerous =
+      call.tool === "run_command" ||
+      call.tool === "write_file" ||
+      call.tool === "edit_file" ||
+      call.tool === "terminal_write" ||
+      call.tool === "terminal_start" ||
+      call.tool === "open_terminal_window";
+    const badgeClass = isCritical ? "alb-badge-err" : isDangerous ? "alb-badge-warn" : "alb-badge-info";
     card.innerHTML = `
       <div class="alb-card-header">
         <div class="alb-header-left">
-          <span class="alb-badge ${isDangerous ? "alb-badge-warn" : "alb-badge-info"}"></span>
+          <span class="alb-badge ${badgeClass}"></span>
           <span class="alb-call-id"></span>
         </div>
         <span class="alb-status alb-status-pending">Onay Bekliyor</span>
@@ -335,12 +383,14 @@
         connected: true,
         workspace_root: pingRes.result.workspace_root || "",
         workspace_exists: Boolean(pingRes.result.workspace_exists),
+        full_system_access: Boolean(pingRes.result.full_system_access),
         error: null,
       };
     } else {
       hostStatus = {
         connected: false,
         workspace_root: "",
+        full_system_access: false,
         error: (pingRes && pingRes.error) || "Baglanti kurulamadi",
       };
     }
@@ -353,10 +403,12 @@
     const statusText = dockEl.querySelector(".alb-dock-status");
     const wsEl = dockEl.querySelector(".alb-dock-ws");
 
-    if (hostStatus.connected && hostStatus.workspace_exists) {
+    if (hostStatus.connected && (hostStatus.workspace_exists || hostStatus.full_system_access)) {
       dot.className = "alb-dot alb-dot-ok";
-      statusText.textContent = "Local Bridge Bagli";
-      wsEl.textContent = hostStatus.workspace_root;
+      statusText.textContent = hostStatus.full_system_access ? "Bridge: Tam Erisim" : "Local Bridge Bagli";
+      wsEl.textContent = hostStatus.full_system_access
+        ? `Tum Bilgisayar (Varsayilan: ${hostStatus.workspace_root || "~"})`
+        : hostStatus.workspace_root;
       wsEl.title = hostStatus.workspace_root;
     } else if (hostStatus.connected && !hostStatus.workspace_exists) {
       dot.className = "alb-dot alb-dot-warn";
