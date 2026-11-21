@@ -1,0 +1,172 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 350px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+.container {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.card {
+  padding: 10px;
+  border-radius: 9px;
+  border: 1px solid #1e293b;
+  background: #111c33;
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.pill-wait {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.pill-ok {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+
+.pill-warn {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
+.pill-err {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.mono-box {
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid #1e293b;
+  background: #020617;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+
+.hint {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+.hint code {
+  display: block;
+  margin-top: 3px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: #020617;
+  color: #7dd3fc;
+  word-break: break-all;
+}
+
+.btn {
+  width: 100%;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: #1e293b;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: #334155;
+}
+
+.btn-primary {
+  background: #0284c7;
+  border-color: #0ea5e9;
+}
+
+.btn-primary:hover {
+  background: #0369a1;
+}
+
+.btn-xs {
+  width: auto;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.toggle:last-child {
+  margin-bottom: 0;
+}
+
+.msg {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #7dd3fc;
+  min-height: 14px;
+}
