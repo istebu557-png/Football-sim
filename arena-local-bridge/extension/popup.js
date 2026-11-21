@@ -2,14 +2,46 @@
 
 function sendMsg(msg) {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(msg, (res) => {
-      if (chrome.runtime.lastError) {
-        resolve({ ok: false, error: chrome.runtime.lastError.message });
+    try {
+      if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) {
+        resolve({ ok: false, error: "Chrome runtime kullanilamiyor." });
         return;
       }
-      resolve(res || { ok: false, error: "Yanit alinamadi" });
-    });
+      chrome.runtime.sendMessage(msg, (res) => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(res || { ok: false, error: "Yanit alinamadi" });
+      });
+    } catch (err) {
+      resolve({ ok: false, error: err && err.message ? err.message : String(err) });
+    }
   });
+}
+
+async function copyText(text) {
+  try {
+    if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_e) {
+    // fallback below
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch (_e2) {
+    return false;
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -99,8 +131,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   copyPromptBtn.addEventListener("click", async () => {
     const prompt = window.ArenaBridgeParser ? window.ArenaBridgeParser.SYSTEM_PROMPT : "";
-    await navigator.clipboard.writeText(prompt);
-    msgBox.textContent = "Sistem promptu panoya kopyalandi.";
+    const ok = await copyText(prompt);
+    msgBox.textContent = ok ? "Sistem promptu panoya kopyalandi." : "Kopyalama basarisiz.";
   });
 
   await runPing();

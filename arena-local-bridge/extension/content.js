@@ -4,14 +4,19 @@
   const Parser = window.ArenaBridgeParser;
   if (!Parser) return;
 
-  const PROCESSED_ATTR = "data-alb-processed";
-  const SOURCE_HASH_ATTR = "data-alb-hash";
-  const CARD_ID_ATTR = "data-alb-card-id";
-
   let settings = { enabled: true, autoInsertResult: false };
-  let hostStatus = { connected: false, workspace_root: "", error: null };
+  let hostStatus = { connected: false, workspace_root: "", full_system_access: false, error: null };
   let scanTimer = null;
   let cardCounter = 0;
+
+  // Map from source code element -> { hash, cardId, cardEl, locked }
+  const trackedNodes = new WeakMap();
+  // Keep ordered list of active card records
+  const activeRecords = new Map();
+
+  let dockEl = null;
+  let trayListEl = null;
+  let trayCountEl = null;
 
   function simpleHash(str) {
     let h = 2166136261;
@@ -22,12 +27,32 @@
     return String(h >>> 0);
   }
 
+  function hasChromeRuntime() {
+    try {
+      return typeof chrome !== "undefined" && Boolean(chrome && chrome.runtime && chrome.runtime.sendMessage);
+    } catch (_e) {
+      return false;
+    }
+  }
+
   function sendMessage(msg) {
     return new Promise((resolve) => {
+      if (!hasChromeRuntime()) {
+        resolve({
+          ok: false,
+          error: "Eklenti baglanti baglami gecersiz (eklenti guncellenmis olabilir). Lutfen sayfayi yenileyin (F5).",
+        });
+        return;
+      }
       try {
         chrome.runtime.sendMessage(msg, (res) => {
-          if (chrome.runtime.lastError) {
-            resolve({ ok: false, error: chrome.runtime.lastError.message });
+          try {
+            if (chrome.runtime && chrome.runtime.lastError) {
+              resolve({ ok: false, error: chrome.runtime.lastError.message || "Chrome runtime hatasi" });
+              return;
+            }
+          } catch (_e) {
+            resolve({ ok: false, error: "Sayfayi yenileyin (F5)." });
             return;
           }
           resolve(res || { ok: false, error: "Yanit alinamadi" });
@@ -39,22 +64,25 @@
   }
 
   function detectLanguageHint(codeEl) {
-    const classes = `${codeEl.className || ""} ${(codeEl.parentElement && codeEl.parentElement.className) || ""}`;
+    if (!codeEl || typeof codeEl.getAttribute !== "function") return "";
+    const parentClass = codeEl.parentElement && typeof codeEl.parentElement.className === "string"
+      ? codeEl.parentElement.className
+      : "";
+    const ownClass = typeof codeEl.className === "string" ? codeEl.className : "";
+    const classes = `${ownClass} ${parentClass}`;
     const langMatch = classes.match(/language-([a-zA-Z0-9_-]+)/);
     if (langMatch) return langMatch[1];
 
-    const dataLang = codeEl.getAttribute("data-language") || (codeEl.parentElement && codeEl.parentElement.getAttribute("data-language"));
+    const dataLang =
+      codeEl.getAttribute("data-language") ||
+      (codeEl.parentElement && codeEl.parentElement.getAttribute && codeEl.parentElement.getAttribute("data-language"));
     if (dataLang) return dataLang;
 
-    // Look for common code block header labels in chat UIs
-    const pre = codeEl.closest("pre");
-    if (pre && pre.parentElement) {
-      const prev = pre.previousElementSibling;
-      if (prev && prev.textContent) {
-        const label = prev.textContent.trim().toLowerCase();
-        if (label.includes("arena-tool")) return "arena-tool";
-        if (label.includes("tool_call")) return "tool_call";
-      }
+    const pre = codeEl.closest ? codeEl.closest("pre") : null;
+    if (pre && pre.previousElementSibling && pre.previousElementSibling.textContent) {
+      const label = pre.previousElementSibling.textContent.trim().toLowerCase();
+      if (label.includes("arena-tool")) return "arena-tool";
+      if (label.includes("tool_call")) return "tool_call";
     }
     return "";
   }
@@ -72,11 +100,11 @@
     ];
     for (const sel of selectors) {
       const candidates = Array.from(document.querySelectorAll(sel)).filter((el) => {
+        if (!el || typeof el.getBoundingClientRect !== "function") return false;
         const rect = el.getBoundingClientRect();
         return rect.width > 80 && rect.height > 20 && !el.disabled;
       });
       if (candidates.length > 0) {
-        // Prefer the lowest visible input on screen (main prompt box)
         candidates.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
         return candidates[0];
       }
@@ -87,38 +115,65 @@
   function insertTextIntoChat(text, append = true) {
     const input = findChatInput();
     if (!input) {
-      return { ok: false, error: "Sohbet giris kutusu bulunamadi. Metni panoya kopyalayabilirsiniz." };
+      return { ok: false, error: "Sohbet giris kutusu bulunamadi. 'Sonucu Kopyala' kullanabilirsiniz." };
     }
 
-    input.focus();
-    if (input.tagName === "TEXTAREA" || input.tagName === "INPUT") {
-      const current = input.value || "";
-      const next = append && current.trim() ? `${current.replace(/\s+$/, "")}\n\n${text}` : text;
-      const proto = input.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-      if (descriptor && descriptor.set) {
-        descriptor.set.call(input, next);
-      } else {
-        input.value = next;
+    try {
+      input.focus();
+      if (input.tagName === "TEXTAREA" || input.tagName === "INPUT") {
+        const current = input.value || "";
+        const next = append && current.trim() ? `${current.replace(/\s+$/, "")}\n\n${text}` : text;
+        const proto = input.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+        if (descriptor && typeof descriptor.set === "function") {
+          descriptor.set.call(input, next);
+        } else {
+          input.value = next;
+        }
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        return { ok: true };
       }
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-      return { ok: true };
-    }
 
-    // contenteditable fallback
-    const currentText = input.innerText || "";
-    const nextText = append && currentText.trim() ? `${currentText.replace(/\s+$/, "")}\n\n${text}` : text;
-    input.innerText = nextText;
-    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
-    return { ok: true };
+      // Rich text / contenteditable (ProseMirror / Lexical / TipTap safe insertion)
+      const sel = window.getSelection();
+      if (sel && typeof document.createRange === "function") {
+        const range = document.createRange();
+        range.selectNodeContents(input);
+        if (!append) {
+          sel.removeAllRanges();
+          sel.addRange(range);
+        } else {
+          range.collapse(false);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      }
+      const prefix = append && (input.textContent || "").trim() ? "\n\n" : "";
+      const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, prefix + text);
+      if (!inserted) {
+        input.textContent = prefix ? `${input.textContent || ""}${prefix}${text}` : text;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: `Sohbet kutusuna yazilamadi (${err && err.message ? err.message : "hata"}). Panoya kopyalayabilirsiniz.`,
+      };
+    }
   }
 
   async function copyToClipboard(text) {
     try {
-      await navigator.clipboard.writeText(text);
-      return true;
+      if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
     } catch (_e) {
+      // fallback below
+    }
+    try {
       const ta = document.createElement("textarea");
       ta.value = text;
       ta.style.position = "fixed";
@@ -128,11 +183,13 @@
       const ok = document.execCommand("copy");
       ta.remove();
       return ok;
+    } catch (_e2) {
+      return false;
     }
   }
 
   function formatSummary(call) {
-    const args = call.args || {};
+    const args = (call && call.args) || {};
     switch (call.tool) {
       case "run_command":
         return `$ ${args.command}${args.cwd && args.cwd !== "." ? `  (cwd: ${args.cwd})` : ""}`;
@@ -207,13 +264,32 @@
       return `Silindi (${r.type}): ${r.path}`;
     }
     if (r.tool === "list_dir") {
-      const lines = (r.entries || []).map((e) => `${e.type === "dir" ? "[DIR] " : "      "}${e.name}${e.type === "file" ? ` (${e.size} B)` : ""}`);
+      const lines = (r.entries || []).map(
+        (e) => `${e.type === "dir" ? "[DIR] " : "      "}${e.name}${e.type === "file" ? ` (${e.size} B)` : ""}`
+      );
       return `Klasor: ${r.path} (${r.total_entries} oge)\n${lines.join("\n")}`;
     }
     return JSON.stringify(r, null, 2);
   }
 
-  function createCardElement(call, cardId) {
+  function updateTrayCounter() {
+    if (!trayCountEl) return;
+    let pending = 0;
+    for (const rec of activeRecords.values()) {
+      if (rec && !rec.locked && rec.valid) pending++;
+    }
+    trayCountEl.textContent = pending > 0 ? `${pending} Bekleyen` : `${activeRecords.size} Islem`;
+    trayCountEl.className = pending > 0 ? "alb-tray-count alb-tray-count-pending" : "alb-tray-count";
+  }
+
+  function expandDock() {
+    if (!dockEl) return;
+    dockEl.classList.remove("alb-dock-collapsed");
+    const btn = dockEl.querySelector(".alb-dock-toggle");
+    if (btn) btn.textContent = "-";
+  }
+
+  function createCardElement(call, cardId, sourceEl) {
     const card = document.createElement("div");
     card.className = "alb-card";
     card.setAttribute("data-alb-card", cardId);
@@ -222,10 +298,16 @@
       card.innerHTML = `
         <div class="alb-card-header">
           <span class="alb-badge alb-badge-err">Gecersiz Arac Cagrisi</span>
+          <button type="button" class="alb-btn alb-btn-xs alb-btn-dismiss">Kapat</button>
         </div>
         <div class="alb-error-text"></div>
       `;
-      card.querySelector(".alb-error-text").textContent = call.error;
+      card.querySelector(".alb-error-text").textContent = call.error || "Bilinmeyen format hatasi";
+      card.querySelector(".alb-btn-dismiss").addEventListener("click", () => {
+        activeRecords.delete(cardId);
+        card.remove();
+        updateTrayCounter();
+      });
       return card;
     }
 
@@ -238,6 +320,7 @@
       call.tool === "terminal_start" ||
       call.tool === "open_terminal_window";
     const badgeClass = isCritical ? "alb-badge-err" : isDangerous ? "alb-badge-warn" : "alb-badge-info";
+
     card.innerHTML = `
       <div class="alb-card-header">
         <div class="alb-header-left">
@@ -250,6 +333,7 @@
       <div class="alb-actions">
         <button type="button" class="alb-btn alb-btn-approve">Onayla ve Calistir</button>
         <button type="button" class="alb-btn alb-btn-reject">Reddet</button>
+        <button type="button" class="alb-btn alb-btn-sm alb-btn-goto">Koda Git</button>
       </div>
       <div class="alb-output-wrap" hidden>
         <pre class="alb-output"></pre>
@@ -268,6 +352,7 @@
     const statusEl = card.querySelector(".alb-status");
     const approveBtn = card.querySelector(".alb-btn-approve");
     const rejectBtn = card.querySelector(".alb-btn-reject");
+    const gotoBtn = card.querySelector(".alb-btn-goto");
     const actionsEl = card.querySelector(".alb-actions");
     const outputWrap = card.querySelector(".alb-output-wrap");
     const outputPre = card.querySelector(".alb-output");
@@ -277,12 +362,28 @@
 
     let lastFormattedResult = "";
 
+    gotoBtn.addEventListener("click", () => {
+      try {
+        if (sourceEl && typeof sourceEl.scrollIntoView === "function") {
+          sourceEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      } catch (_e) {
+        // ignore
+      }
+    });
+
     approveBtn.addEventListener("click", async () => {
+      const rec = activeRecords.get(cardId);
+      if (rec) rec.locked = true;
+      const tracked = trackedNodes.get(sourceEl);
+      if (tracked) tracked.locked = true;
+
       card.setAttribute("data-alb-locked", "true");
       approveBtn.disabled = true;
       rejectBtn.disabled = true;
       statusEl.textContent = "Calisiyor...";
       statusEl.className = "alb-status alb-status-running";
+      updateTrayCounter();
 
       const response = await sendMessage({ type: "RUN_TOOL", call });
       lastFormattedResult = Parser.formatToolResultForChat(call, response);
@@ -307,10 +408,16 @@
     });
 
     rejectBtn.addEventListener("click", () => {
+      const rec = activeRecords.get(cardId);
+      if (rec) rec.locked = true;
+      const tracked = trackedNodes.get(sourceEl);
+      if (tracked) tracked.locked = true;
+
       card.setAttribute("data-alb-locked", "true");
       statusEl.textContent = "Reddedildi";
       statusEl.className = "alb-status alb-status-rejected";
       actionsEl.hidden = true;
+      updateTrayCounter();
     });
 
     insertBtn.addEventListener("click", () => {
@@ -327,39 +434,56 @@
   }
 
   function scanDocument() {
-    if (!settings.enabled) return;
+    if (!settings.enabled || !trayListEl) return;
 
-    const codeBlocks = document.querySelectorAll("pre code");
-    for (const codeEl of codeBlocks) {
-      if (codeEl.closest(".alb-card") || codeEl.closest(".alb-dock")) continue;
+    try {
+      const nodes = document.querySelectorAll("pre code, pre");
+      let addedNewPending = false;
 
-      const preEl = codeEl.closest("pre");
-      if (!preEl || !preEl.parentElement) continue;
+      for (const el of nodes) {
+        if (!el || (el.closest && (el.closest(".alb-card") || el.closest(".alb-dock")))) continue;
+        // If <pre> has a <code> child, process the <code> child instead of <pre> twice
+        if (el.tagName === "PRE" && el.querySelector && el.querySelector("code")) continue;
 
-      const raw = codeEl.textContent || "";
-      const hash = simpleHash(raw);
-      const prevHash = codeEl.getAttribute(SOURCE_HASH_ATTR);
+        const raw = el.textContent || "";
+        const hash = simpleHash(raw);
+        const existing = trackedNodes.get(el);
 
-      const existingCardId = codeEl.getAttribute(CARD_ID_ATTR);
-      if (existingCardId) {
-        const existingCard = document.querySelector(`[data-alb-card="${existingCardId}"]`);
-        if (existingCard && (existingCard.getAttribute("data-alb-locked") === "true" || prevHash === hash)) {
+        if (existing) {
+          if (existing.locked || existing.hash === hash) continue;
+          if (existing.cardEl && existing.cardEl.parentNode) {
+            existing.cardEl.remove();
+          }
+          activeRecords.delete(existing.cardId);
+        }
+
+        const hint = detectLanguageHint(el);
+        const parsed = Parser.parseToolBlock(raw, { languageHint: hint });
+
+        if (!parsed) {
+          trackedNodes.set(el, { hash, cardId: null, cardEl: null, locked: false });
           continue;
         }
-        if (existingCard) existingCard.remove();
+
+        const cardId = `alb_${++cardCounter}`;
+        const card = createCardElement(parsed, cardId, el);
+        // Prepend newest tool call at top of tray so user sees it immediately without scrolling Arena chat!
+        trayListEl.insertBefore(card, trayListEl.firstChild);
+
+        trackedNodes.set(el, { hash, cardId, cardEl: card, locked: false });
+        activeRecords.set(cardId, { cardId, cardEl: card, locked: false, valid: Boolean(parsed.valid) });
+        if (parsed.valid) addedNewPending = true;
       }
 
-      const hint = detectLanguageHint(codeEl);
-      const parsed = Parser.parseToolBlock(raw, { languageHint: hint });
-      codeEl.setAttribute(SOURCE_HASH_ATTR, hash);
-      codeEl.setAttribute(PROCESSED_ATTR, "true");
-
-      if (!parsed) continue;
-
-      const cardId = `alb_${++cardCounter}`;
-      codeEl.setAttribute(CARD_ID_ATTR, cardId);
-      const card = createCardElement(parsed, cardId);
-      preEl.insertAdjacentElement("afterend", card);
+      updateTrayCounter();
+      if (addedNewPending) {
+        expandDock();
+      }
+    } catch (err) {
+      if (dockEl) {
+        const msgEl = dockEl.querySelector(".alb-dock-msg");
+        if (msgEl) msgEl.textContent = `Tarama hatasi: ${err && err.message ? err.message : String(err)}`;
+      }
     }
   }
 
@@ -368,7 +492,7 @@
     scanTimer = setTimeout(scanDocument, 300);
   }
 
-  async function refreshStatusAndSettings(dockEl) {
+  async function refreshStatusAndSettings() {
     const [settingsRes, pingRes] = await Promise.all([
       sendMessage({ type: "GET_SETTINGS" }),
       sendMessage({ type: "SERVER_PING" }),
@@ -400,10 +524,10 @@
     if (dockEl) updateDockUI(dockEl);
   }
 
-  function updateDockUI(dockEl) {
-    const dot = dockEl.querySelector(".alb-dot");
-    const statusText = dockEl.querySelector(".alb-dock-status");
-    const wsEl = dockEl.querySelector(".alb-dock-ws");
+  function updateDockUI(dock) {
+    const dot = dock.querySelector(".alb-dot");
+    const statusText = dock.querySelector(".alb-dock-status");
+    const wsEl = dock.querySelector(".alb-dock-ws");
 
     if (hostStatus.connected && (hostStatus.workspace_exists || hostStatus.full_system_access)) {
       dot.className = "alb-dot alb-dot-ok";
@@ -430,7 +554,8 @@
   }
 
   function createFloatingDock() {
-    if (document.querySelector(".alb-dock")) return null;
+    const existing = document.querySelector(".alb-dock");
+    if (existing) return existing;
 
     const dock = document.createElement("div");
     dock.className = "alb-dock alb-dock-collapsed";
@@ -438,10 +563,11 @@
       <div class="alb-dock-header" title="Arena Local Bridge">
         <span class="alb-dot alb-dot-warn"></span>
         <span class="alb-dock-status">Kontrol ediliyor...</span>
+        <span class="alb-tray-count">0 Islem</span>
         <button type="button" class="alb-dock-toggle" aria-label="Paneli Ac/Kapat">+</button>
       </div>
       <div class="alb-dock-body">
-        <div class="alb-dock-ws-label">Calisma Klasoru:</div>
+        <div class="alb-dock-ws-label">Calisma Ortami:</div>
         <div class="alb-dock-ws">-</div>
         <div class="alb-dock-btns">
           <button type="button" class="alb-btn alb-btn-sm alb-copy-sys">Sistem Promptu Kopyala</button>
@@ -449,12 +575,15 @@
           <button type="button" class="alb-btn alb-btn-sm alb-rescan">Tara / Ping</button>
         </div>
         <div class="alb-dock-msg"></div>
+        <div class="alb-tray-list"></div>
       </div>
     `;
 
     const toggleBtn = dock.querySelector(".alb-dock-toggle");
     const header = dock.querySelector(".alb-dock-header");
     const msgEl = dock.querySelector(".alb-dock-msg");
+    trayListEl = dock.querySelector(".alb-tray-list");
+    trayCountEl = dock.querySelector(".alb-tray-count");
 
     function toggle() {
       const collapsed = dock.classList.toggle("alb-dock-collapsed");
@@ -477,7 +606,7 @@
 
     dock.querySelector(".alb-rescan").addEventListener("click", async () => {
       msgEl.textContent = "Yenileniyor...";
-      await refreshStatusAndSettings(dock);
+      await refreshStatusAndSettings();
       scanDocument();
       msgEl.textContent = "Tarama ve baglanti kontrolu tamamlandi.";
     });
@@ -487,26 +616,35 @@
   }
 
   async function init() {
-    const dock = createFloatingDock();
-    await refreshStatusAndSettings(dock);
+    dockEl = createFloatingDock();
+    await refreshStatusAndSettings();
     scanDocument();
 
-    const observer = new MutationObserver(() => {
-      scheduleScan();
-    });
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
+    if (document.body && typeof MutationObserver !== "undefined") {
+      const observer = new MutationObserver(() => {
+        scheduleScan();
+      });
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    }
 
-    chrome.storage.onChanged.addListener((changes) => {
-      if (changes.enabled) settings.enabled = Boolean(changes.enabled.newValue);
-      if (changes.autoInsertResult) settings.autoInsertResult = Boolean(changes.autoInsertResult.newValue);
-      if (changes.apiToken || changes.serverUrl) {
-        refreshStatusAndSettings(dock);
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged) {
+        chrome.storage.onChanged.addListener((changes) => {
+          if (!changes) return;
+          if (changes.enabled) settings.enabled = Boolean(changes.enabled.newValue);
+          if (changes.autoInsertResult) settings.autoInsertResult = Boolean(changes.autoInsertResult.newValue);
+          if (changes.apiToken || changes.serverUrl) {
+            refreshStatusAndSettings();
+          }
+        });
       }
-    });
+    } catch (_e) {
+      // ignore if extension context invalidated
+    }
   }
 
   if (document.readyState === "loading") {

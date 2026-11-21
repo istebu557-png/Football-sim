@@ -53,6 +53,7 @@ Kullanilabilir araclar:
 Ornek format:
 \`\`\`arena-tool
 {
+  "__arena_tool__": true,
   "id": "call_1",
   "tool": "terminal_start",
   "args": {
@@ -90,7 +91,15 @@ Kurallar:
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
 
     const hasMarker = parsed.__arena_tool__ === true || parsed.arena_tool === true;
-    if (!isExplicitTag && !hasMarker) {
+    const matchesSupportedSchema =
+      typeof parsed.tool === "string" &&
+      SUPPORTED_TOOLS.includes(parsed.tool) &&
+      parsed.args !== undefined &&
+      parsed.args !== null &&
+      typeof parsed.args === "object" &&
+      !Array.isArray(parsed.args);
+
+    if (!isExplicitTag && !hasMarker && !matchesSupportedSchema) {
       return null;
     }
 
