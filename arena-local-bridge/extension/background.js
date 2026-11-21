@@ -27,9 +27,17 @@ function normalizeServerUrl(rawUrl) {
 
 async function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(DEFAULT_SETTINGS, (items) => {
-      resolve({ ...DEFAULT_SETTINGS, ...(items || {}) });
-    });
+    try {
+      if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+        resolve({ ...DEFAULT_SETTINGS });
+        return;
+      }
+      chrome.storage.local.get(DEFAULT_SETTINGS, (items) => {
+        resolve({ ...DEFAULT_SETTINGS, ...(items || {}) });
+      });
+    } catch (_e) {
+      resolve({ ...DEFAULT_SETTINGS });
+    }
   });
 }
 
@@ -43,7 +51,15 @@ async function saveSettings(patch) {
     next.apiToken = patch.apiToken.trim();
   }
   return new Promise((resolve) => {
-    chrome.storage.local.set(next, () => resolve(next));
+    try {
+      if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+        resolve(next);
+        return;
+      }
+      chrome.storage.local.set(next, () => resolve(next));
+    } catch (_e) {
+      resolve(next);
+    }
   });
 }
 

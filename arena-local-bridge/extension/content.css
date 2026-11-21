@@ -207,7 +207,8 @@
   right: 16px;
   bottom: 16px;
   z-index: 2147483000;
-  width: 290px;
+  width: 420px;
+  max-width: 92vw;
   border-radius: 10px;
   border: 1px solid #334155;
   background: rgba(15, 23, 42, 0.96);
@@ -216,6 +217,34 @@
   font-size: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(8px);
+}
+
+.alb-tray-count {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+.alb-tray-count-pending {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.alb-tray-list {
+  margin-top: 8px;
+  max-height: 55vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.alb-tray-list .alb-card {
+  margin: 0;
 }
 
 .alb-dock-collapsed {

@@ -53,15 +53,37 @@ test("parses terminal_start and terminal_write blocks", () => {
   assert.equal(ctrl.valid, true);
 });
 
-test("ignores plain json code block without explicit marker or tag", () => {
-  const res = Parser.parseToolBlock(
+test("ignores unrelated plain json code blocks", () => {
+  const res1 = Parser.parseToolBlock(
     JSON.stringify({
-      tool: "run_command",
-      args: { command: "rm -rf /" },
+      name: "example",
+      tool: "unrelated_tool",
+      data: [1, 2, 3],
     }),
     { languageHint: "json" }
   );
-  assert.equal(res, null);
+  assert.equal(res1, null);
+
+  const res2 = Parser.parseToolBlock(
+    JSON.stringify({
+      tool: "hammer",
+      price: 10,
+    }),
+    { languageHint: "json" }
+  );
+  assert.equal(res2, null);
+});
+
+test("accepts json block matching supported tool schema even if tag was stripped", () => {
+  const res = Parser.parseToolBlock(
+    JSON.stringify({
+      tool: "run_command",
+      args: { command: "pwd" },
+    }),
+    { languageHint: "" }
+  );
+  assert.equal(res.valid, true);
+  assert.equal(res.tool, "run_command");
 });
 
 test("accepts json block when __arena_tool__ marker is true", () => {
