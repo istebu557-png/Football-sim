@@ -129,4 +129,14 @@ test("formats tool result back into arena-tool-result markdown block", () => {
   assert.match(formatted, /^```arena-tool-result\n/);
   assert.match(formatted, /"exit_code": 0/);
   assert.match(formatted, /\n```$/);
+
+  const innerJson = formatted.replace(/^```arena-tool-result\n/, "").replace(/\n```$/, "");
+  assert.equal(Parser.parseToolBlock(innerJson, { languageHint: "arena-tool-result" }), null);
+  assert.equal(Parser.parseToolBlock(innerJson, { languageHint: "json" }), null);
+});
+
+test("ignores __example__ blocks from SYSTEM_PROMPT", () => {
+  const match = Parser.SYSTEM_PROMPT.match(/```arena-tool\n([\s\S]*?)\n```/);
+  assert.ok(match);
+  assert.equal(Parser.parseToolBlock(match[1], { languageHint: "arena-tool" }), null);
 });

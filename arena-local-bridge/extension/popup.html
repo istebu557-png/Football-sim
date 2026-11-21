@@ -43,15 +43,27 @@
     </section>
 
     <section class="card">
-      <div class="label" style="margin-bottom: 8px;">Ayarlar</div>
+      <div class="label" style="margin-bottom: 8px;">Otomasyon ve Ayarlar</div>
       <label class="toggle">
         <input type="checkbox" id="enabledChk" />
         <span>Arena.ai sayfasinda arac bloklarini algila</span>
       </label>
       <label class="toggle">
-        <input type="checkbox" id="autoInsertChk" />
-        <span>Calistirma sonrasi sonucu sohbet kutusuna otomatik yerlestir (gondermez)</span>
+        <input type="checkbox" id="autoRunChk" />
+        <span>Araclari otomatik calistir (onay beklemeden)</span>
       </label>
+      <label class="toggle">
+        <input type="checkbox" id="autoInsertChk" />
+        <span>Sonucu otomatik olarak sohbet kutusuna yaz</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="autoSubmitChk" />
+        <span>Yazilan sonucu otomatik olarak chate gonder</span>
+      </label>
+      <div class="row-between" style="margin-top: 8px; margin-bottom: 0;">
+        <label class="field-label" style="margin: 0;" for="maxAutoStepsInput">Maks. ardisik otomatik adim</label>
+        <input id="maxAutoStepsInput" type="number" min="1" max="100" class="input" style="width: 72px; text-align: center;" />
+      </div>
     </section>
 
     <section class="card">

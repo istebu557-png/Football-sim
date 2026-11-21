@@ -50,10 +50,11 @@ Kullanilabilir araclar:
 12. list_dir: Klasor icerigini listeler.
     args: { "path": ".", "include_hidden": false }
 
-Ornek format:
+Ornek format (gercek cagrilarda "__example__" alanini ekleme):
 \`\`\`arena-tool
 {
   "__arena_tool__": true,
+  "__example__": true,
   "id": "call_1",
   "tool": "terminal_start",
   "args": {
@@ -65,7 +66,8 @@ Ornek format:
 Kurallar:
 - Yalnizca gecerli JSON yaz (yorum satiri veya trailing comma kullanma).
 - Etkilesimli surecler (or. dev server, python REPL, ssh, ardisik cd komutlari) icin \`terminal_start\` + \`terminal_write\` + \`terminal_read\` kullan.
-- Komut sonucunu uydurma; sonucu kullanicidan bekle.`;
+- Komut sonucunu uydurma; \`arena-tool-result\` yanitini bekle.
+- Gorev tamamen bittiginde yeni \`arena-tool\` blogu yazmadan normal ozet yanit ver.`;
 
   /**
    * Parse raw text from a code block into a validated tool call object, or null if not a valid tool call.
@@ -79,6 +81,7 @@ Kurallar:
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
 
     const hint = ((options && options.languageHint) || "").toLowerCase().trim();
+    if (hint === "arena-tool-result") return null;
     const isExplicitTag = hint === "arena-tool" || hint === "tool_call" || hint === "arena_tool";
 
     let parsed;
@@ -89,6 +92,8 @@ Kurallar:
     }
 
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    // Never treat tool results or prompt examples as tool calls
+    if (parsed.ok !== undefined || parsed.result !== undefined || parsed.__example__ === true) return null;
 
     const hasMarker = parsed.__arena_tool__ === true || parsed.arena_tool === true;
     const matchesSupportedSchema =

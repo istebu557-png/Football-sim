@@ -3,7 +3,10 @@
 const DEFAULT_SERVER_URL = "http://127.0.0.1:38450";
 const DEFAULT_SETTINGS = {
   enabled: true,
-  autoInsertResult: false,
+  autoRun: true,
+  autoInsertResult: true,
+  autoSubmitResult: true,
+  maxAutoSteps: 20,
   serverUrl: DEFAULT_SERVER_URL,
   apiToken: "",
 };
