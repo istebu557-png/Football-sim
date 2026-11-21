@@ -1,0 +1,311 @@
+.alb-card {
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.alb-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.alb-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.alb-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.alb-badge-info {
+  background: rgba(56, 189, 248, 0.16);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.alb-badge-warn {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.alb-badge-err {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.alb-call-id {
+  color: #94a3b8;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.alb-status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.alb-status-pending {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.alb-status-running {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+
+.alb-status-ok {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+
+.alb-status-warn {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
+.alb-status-err,
+.alb-status-rejected {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.alb-summary {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #020617;
+  border: 1px solid #1e293b;
+  color: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 10px;
+}
+
+.alb-actions,
+.alb-post-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.alb-btn {
+  appearance: none;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  background: #1e293b;
+  color: #f1f5f9;
+}
+
+.alb-btn:hover:not(:disabled) {
+  background: #334155;
+}
+
+.alb-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.alb-btn-approve {
+  background: #0284c7;
+  border-color: #0ea5e9;
+  color: #ffffff;
+}
+
+.alb-btn-approve:hover:not(:disabled) {
+  background: #0369a1;
+}
+
+.alb-btn-reject {
+  background: transparent;
+  border-color: #475569;
+  color: #cbd5e1;
+}
+
+.alb-btn-reject:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+  color: #fecaca;
+}
+
+.alb-btn-insert {
+  background: #15803d;
+  border-color: #22c55e;
+  color: #ffffff;
+}
+
+.alb-btn-insert:hover:not(:disabled) {
+  background: #166534;
+}
+
+.alb-btn-sm {
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
+.alb-output-wrap {
+  margin-top: 8px;
+}
+
+.alb-output {
+  margin: 0 0 8px;
+  padding: 10px;
+  max-height: 280px;
+  overflow: auto;
+  border-radius: 6px;
+  background: #020617;
+  border: 1px solid #1e293b;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.alb-feedback {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.alb-error-text {
+  color: #fca5a5;
+  font-size: 12px;
+}
+
+/* Floating Dock */
+.alb-dock {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  width: 290px;
+  border-radius: 10px;
+  border: 1px solid #334155;
+  background: rgba(15, 23, 42, 0.96);
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+}
+
+.alb-dock-collapsed {
+  width: auto;
+}
+
+.alb-dock-collapsed .alb-dock-body {
+  display: none;
+}
+
+.alb-dock-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.alb-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.alb-dot-ok {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
+}
+
+.alb-dot-warn {
+  background: #f59e0b;
+}
+
+.alb-dot-err {
+  background: #ef4444;
+}
+
+.alb-dock-status {
+  font-weight: 600;
+  font-size: 12px;
+  flex: 1;
+}
+
+.alb-dock-toggle {
+  appearance: none;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.alb-dock-body {
+  padding: 0 10px 10px;
+  border-top: 1px solid #1e293b;
+}
+
+.alb-dock-ws-label {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.alb-dock-ws {
+  margin: 3px 0 8px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: #020617;
+  border: 1px solid #1e293b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.alb-dock-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.alb-dock-msg {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #7dd3fc;
+  min-height: 14px;
+}

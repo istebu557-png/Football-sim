@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arena Local Bridge</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <img src="icons/icon48.png" alt="Logo" class="logo" />
+      <div>
+        <h1>Arena Local Bridge</h1>
+        <p class="subtitle">Chrome Native Messaging (Secenek 2A)</p>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="row-between">
+        <span class="label">Native Host Durumu</span>
+        <span id="statusBadge" class="pill pill-wait">Kontrol ediliyor</span>
+      </div>
+      <div id="hostInfo" class="mono-box">Baglanti bekleniyor...</div>
+      <button id="pingBtn" type="button" class="btn btn-primary">Baglantiyi Test Et (Ping)</button>
+    </section>
+
+    <section class="card">
+      <div class="row-between">
+        <span class="label">Eklenti ID (install.py icin)</span>
+        <button id="copyIdBtn" type="button" class="btn btn-xs">Kopyala</button>
+      </div>
+      <div id="extIdBox" class="mono-box">-</div>
+      <div class="hint">
+        Kurulum komutu:<br />
+        <code id="installCmd">python3 install/install.py --extension-id ...</code>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="label" style="margin-bottom: 8px;">Ayarlar</div>
+      <label class="toggle">
+        <input type="checkbox" id="enabledChk" />
+        <span>Arena.ai sayfasinda arac bloklarini algila</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="autoInsertChk" />
+        <span>Calistirma sonrasi sonucu sohbet kutusuna otomatik yerlestir (gondermez)</span>
+      </label>
+    </section>
+
+    <section class="card">
+      <button id="copyPromptBtn" type="button" class="btn">Sistem Promptunu Kopyala</button>
+      <div id="msgBox" class="msg"></div>
+    </section>
+  </div>
+
+  <script src="tool-parser.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

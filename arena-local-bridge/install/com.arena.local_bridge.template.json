@@ -1,0 +1,9 @@
+{
+  "name": "com.arena.local_bridge",
+  "description": "Arena.ai Local Terminal & Tool Bridge Native Messaging Host",
+  "path": "/ABSOLUTE/PATH/TO/host.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_EXTENSION_ID/"
+  ]
+}
