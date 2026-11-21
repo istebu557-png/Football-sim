@@ -1,8 +1,17 @@
 # Arena.ai Local Terminal & Tool Bridge (Seçenek 2B — Localhost HTTP + API Token)
 
-Arena.ai sohbet penceresinde modelin ürettiği araç ve terminal çağrılarını (`arena-tool` bloklarını), **manuel onayınızla** yerel `127.0.0.1` sunucusu üzerinden bilgisayarınızda çalıştıran Chrome Manifest V3 eklentisidir.
+Arena.ai sohbet penceresinde modelin ürettiği araç ve terminal çağrılarını (`arena-tool` bloklarını) yerel `127.0.0.1` sunucusu üzerinden bilgisayarınızda çalıştıran, çıktıyı sohbete yazıp gönderebilen Chrome Manifest V3 eklentisidir.
 
 Kurulum için Extension ID kopyalamaya, Registry düzenlemeye veya Native Messaging dosyası yerleştirmeye gerek yoktur.
+
+---
+
+## Otonom Çalışma (Tam Otomatik Mod)
+
+- Modelin yanıtı tamamlandığında yeni üretilen araç blokları **otomatik çalıştırılır**, oluşan `arena-tool-result` çıktısı sohbet kutusuna **otomatik yazılır** ve **otomatik gönderilir**.
+- Sayfa ilk yüklendiğinde mevcut eski sohbet geçmişindeki bloklar güvenlik için **çalıştırılmaz** (`Gecmis Oge`).
+- Sağ alttaki paneldeki **`Otonom: ACIK / KAPALI`** butonuyla istediğiniz anda tek tıkla durdurup manuel onay moduna geçebilirsiniz.
+- Sonsuz döngüleri önlemek için varsayılan ardışık adım sınırı **20**'dir (eklenti popup'ından değiştirilebilir).
 
 ---
 
@@ -73,7 +82,7 @@ arena-local-bridge/
 
 - **Yalnızca `127.0.0.1`:** Sunucu ağ dışına açılmaz.
 - **Bearer Token + Origin Kontrolü:** Her istekte `Authorization: Bearer <token>` gerekir; tarayıcıdaki normal web sitelerinden (`http://` / `https://`) gelen doğrudan `Origin` istekleri `403` ile reddedilir.
-- **Manuel Onay:** Hiçbir araç **Onayla ve Çalıştır** butonuna basılmadan çalışmaz.
+- **Otonom / Manuel Kontrol:** Varsayılan tam otomatik akışta `maxAutoSteps` sınırı ve anında durdurma düğmesi vardır; istenirse popup'tan yalnızca manuel onaya dönülebilir.
 - **Denetim Kaydı:** Tüm işlemler `~/.arena-local-bridge/audit.log` dosyasına kaydedilir.
 
 ---

@@ -172,6 +172,16 @@
   font-size: 11px;
 }
 
+.alb-btn-auto-on {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: #f59e0b;
+  color: #fde68a;
+}
+
+.alb-btn-auto-on:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.32);
+}
+
 .alb-output-wrap {
   margin-top: 8px;
 }

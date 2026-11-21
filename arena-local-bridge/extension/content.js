@@ -4,19 +4,31 @@
   const Parser = window.ArenaBridgeParser;
   if (!Parser) return;
 
-  let settings = { enabled: true, autoInsertResult: false };
+  let settings = {
+    enabled: true,
+    autoRun: true,
+    autoInsertResult: true,
+    autoSubmitResult: true,
+    maxAutoSteps: 20,
+  };
   let hostStatus = { connected: false, workspace_root: "", full_system_access: false, error: null };
   let scanTimer = null;
   let cardCounter = 0;
+  let initialScanDone = false;
+  let autoBusy = false;
+  let autoStepsCount = 0;
 
-  // Map from source code element -> { hash, cardId, cardEl, locked }
+  // Map from source code element -> { hash, occurrenceKey, cardId, cardEl, locked }
   const trackedNodes = new WeakMap();
-  // Keep ordered list of active card records
+  // Active UI card records keyed by cardId
   const activeRecords = new Map();
+  // Occurrence keys ("<hash>#<idx>") already executed or baselined
+  const executedOccurrences = new Set();
 
   let dockEl = null;
   let trayListEl = null;
   let trayCountEl = null;
+  let autoToggleBtn = null;
 
   function simpleHash(str) {
     let h = 2166136261;
@@ -63,11 +75,18 @@
     });
   }
 
+  function setDockMessage(text) {
+    if (!dockEl) return;
+    const msgEl = dockEl.querySelector(".alb-dock-msg");
+    if (msgEl) msgEl.textContent = text || "";
+  }
+
   function detectLanguageHint(codeEl) {
     if (!codeEl || typeof codeEl.getAttribute !== "function") return "";
-    const parentClass = codeEl.parentElement && typeof codeEl.parentElement.className === "string"
-      ? codeEl.parentElement.className
-      : "";
+    const parentClass =
+      codeEl.parentElement && typeof codeEl.parentElement.className === "string"
+        ? codeEl.parentElement.className
+        : "";
     const ownClass = typeof codeEl.className === "string" ? codeEl.className : "";
     const classes = `${ownClass} ${parentClass}`;
     const langMatch = classes.match(/language-([a-zA-Z0-9_-]+)/);
@@ -81,10 +100,37 @@
     const pre = codeEl.closest ? codeEl.closest("pre") : null;
     if (pre && pre.previousElementSibling && pre.previousElementSibling.textContent) {
       const label = pre.previousElementSibling.textContent.trim().toLowerCase();
+      if (label.includes("arena-tool-result")) return "arena-tool-result";
       if (label.includes("arena-tool")) return "arena-tool";
       if (label.includes("tool_call")) return "tool_call";
     }
     return "";
+  }
+
+  function isModelStreaming() {
+    try {
+      const buttons = document.querySelectorAll("button");
+      for (const btn of buttons) {
+        if (btn.closest && btn.closest(".alb-dock")) continue;
+        const rect = btn.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0 || btn.disabled) continue;
+        const label = `${btn.getAttribute("aria-label") || ""} ${btn.getAttribute("title") || ""} ${btn.textContent || ""}`
+          .trim()
+          .toLowerCase();
+        if (
+          label === "stop" ||
+          label === "durdur" ||
+          label.includes("stop generating") ||
+          label.includes("stop response") ||
+          label.includes("üretimi durdur")
+        ) {
+          return true;
+        }
+      }
+    } catch (_e) {
+      // ignore
+    }
+    return false;
   }
 
   function findChatInput() {
@@ -101,12 +147,56 @@
     for (const sel of selectors) {
       const candidates = Array.from(document.querySelectorAll(sel)).filter((el) => {
         if (!el || typeof el.getBoundingClientRect !== "function") return false;
+        if (el.closest && el.closest(".alb-dock")) return false;
         const rect = el.getBoundingClientRect();
         return rect.width > 80 && rect.height > 20 && !el.disabled;
       });
       if (candidates.length > 0) {
         candidates.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
         return candidates[0];
+      }
+    }
+    return null;
+  }
+
+  function findSubmitButton(input) {
+    if (!input) return null;
+    const containers = [];
+    const form = input.closest ? input.closest("form") : null;
+    if (form) containers.push(form);
+
+    let p = input.parentElement;
+    for (let i = 0; i < 4 && p; i++) {
+      containers.push(p);
+      p = p.parentElement;
+    }
+
+    for (const box of containers) {
+      const directSubmit = box.querySelector('button[type="submit"]:not(:disabled)');
+      if (directSubmit && directSubmit.getBoundingClientRect().width > 0) {
+        return directSubmit;
+      }
+
+      const buttons = Array.from(box.querySelectorAll("button:not(:disabled)")).filter((btn) => {
+        if (btn.closest && btn.closest(".alb-dock")) return false;
+        const rect = btn.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        const label = `${btn.getAttribute("aria-label") || ""} ${btn.getAttribute("title") || ""} ${btn.textContent || ""}`
+          .trim()
+          .toLowerCase();
+        if (label.includes("attach") || label.includes("upload") || label.includes("mic") || label.includes("clear")) {
+          return false;
+        }
+        return (
+          label.includes("send") ||
+          label.includes("submit") ||
+          label.includes("gönder") ||
+          label.includes("gonder") ||
+          btn.getAttribute("type") === "submit"
+        );
+      });
+      if (buttons.length > 0) {
+        return buttons[buttons.length - 1];
       }
     }
     return null;
@@ -132,7 +222,7 @@
         }
         input.dispatchEvent(new Event("input", { bubbles: true }));
         input.dispatchEvent(new Event("change", { bubbles: true }));
-        return { ok: true };
+        return { ok: true, input };
       }
 
       // Rich text / contenteditable (ProseMirror / Lexical / TipTap safe insertion)
@@ -150,17 +240,48 @@
         }
       }
       const prefix = append && (input.textContent || "").trim() ? "\n\n" : "";
-      const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, prefix + text);
+      const inserted =
+        typeof document.execCommand === "function" && document.execCommand("insertText", false, prefix + text);
       if (!inserted) {
         input.textContent = prefix ? `${input.textContent || ""}${prefix}${text}` : text;
         input.dispatchEvent(new Event("input", { bubbles: true }));
       }
-      return { ok: true };
+      return { ok: true, input };
     } catch (err) {
       return {
         ok: false,
         error: `Sohbet kutusuna yazilamadi (${err && err.message ? err.message : "hata"}). Panoya kopyalayabilirsiniz.`,
       };
+    }
+  }
+
+  async function submitChatMessage(input) {
+    if (!input) return { ok: false, error: "Giris kutusu yok." };
+    await new Promise((r) => setTimeout(r, 180));
+
+    const sendBtn = findSubmitButton(input);
+    if (sendBtn && !sendBtn.disabled) {
+      sendBtn.click();
+      return { ok: true, method: "button" };
+    }
+
+    // Fallback: press Enter without Shift
+    try {
+      input.focus();
+      const evInit = {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      };
+      input.dispatchEvent(new KeyboardEvent("keydown", evInit));
+      input.dispatchEvent(new KeyboardEvent("keypress", evInit));
+      input.dispatchEvent(new KeyboardEvent("keyup", evInit));
+      return { ok: true, method: "enter" };
+    } catch (err) {
+      return { ok: false, error: err && err.message ? err.message : String(err) };
     }
   }
 
@@ -282,6 +403,17 @@
     trayCountEl.className = pending > 0 ? "alb-tray-count alb-tray-count-pending" : "alb-tray-count";
   }
 
+  function updateAutoToggleUI() {
+    if (!autoToggleBtn) return;
+    if (settings.autoRun) {
+      autoToggleBtn.textContent = `Otonom: ACIK (${autoStepsCount}/${settings.maxAutoSteps || 20})`;
+      autoToggleBtn.className = "alb-btn alb-btn-sm alb-btn-auto-on";
+    } else {
+      autoToggleBtn.textContent = "Otonom: KAPALI";
+      autoToggleBtn.className = "alb-btn alb-btn-sm";
+    }
+  }
+
   function expandDock() {
     if (!dockEl) return;
     dockEl.classList.remove("alb-dock-collapsed");
@@ -289,7 +421,7 @@
     if (btn) btn.textContent = "-";
   }
 
-  function createCardElement(call, cardId, sourceEl) {
+  function createCardElement(call, cardId, sourceEl, occurrenceKey) {
     const card = document.createElement("div");
     card.className = "alb-card";
     card.setAttribute("data-alb-card", cardId);
@@ -308,7 +440,7 @@
         card.remove();
         updateTrayCounter();
       });
-      return card;
+      return { card, execute: null };
     }
 
     const isCritical = call.tool === "delete_path";
@@ -362,21 +494,12 @@
 
     let lastFormattedResult = "";
 
-    gotoBtn.addEventListener("click", () => {
-      try {
-        if (sourceEl && typeof sourceEl.scrollIntoView === "function") {
-          sourceEl.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      } catch (_e) {
-        // ignore
-      }
-    });
-
-    approveBtn.addEventListener("click", async () => {
+    async function executeCall(options = { insertAndSubmit: false }) {
       const rec = activeRecords.get(cardId);
       if (rec) rec.locked = true;
       const tracked = trackedNodes.get(sourceEl);
       if (tracked) tracked.locked = true;
+      if (occurrenceKey) executedOccurrences.add(occurrenceKey);
 
       card.setAttribute("data-alb-locked", "true");
       approveBtn.disabled = true;
@@ -401,10 +524,32 @@
       }
       actionsEl.hidden = true;
 
-      if (settings.autoInsertResult) {
-        const ins = insertTextIntoChat(lastFormattedResult, true);
-        feedbackEl.textContent = ins.ok ? "Sohbet kutusuna eklendi." : ins.error;
+      if (options.insertAndSubmit) {
+        if (settings.autoInsertResult) {
+          const ins = insertTextIntoChat(lastFormattedResult, true);
+          feedbackEl.textContent = ins.ok ? "Sohbet kutusuna eklendi." : ins.error;
+          if (ins.ok && settings.autoSubmitResult) {
+            const sub = await submitChatMessage(ins.input);
+            feedbackEl.textContent = sub.ok ? "Otomatik gonderildi!" : `Eklendi ama gonderilemedi: ${sub.error}`;
+          }
+        }
       }
+
+      return lastFormattedResult;
+    }
+
+    gotoBtn.addEventListener("click", () => {
+      try {
+        if (sourceEl && typeof sourceEl.scrollIntoView === "function") {
+          sourceEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      } catch (_e) {
+        // ignore
+      }
+    });
+
+    approveBtn.addEventListener("click", async () => {
+      await executeCall({ insertAndSubmit: true });
     });
 
     rejectBtn.addEventListener("click", () => {
@@ -412,6 +557,7 @@
       if (rec) rec.locked = true;
       const tracked = trackedNodes.get(sourceEl);
       if (tracked) tracked.locked = true;
+      if (occurrenceKey) executedOccurrences.add(occurrenceKey);
 
       card.setAttribute("data-alb-locked", "true");
       statusEl.textContent = "Reddedildi";
@@ -430,7 +576,60 @@
       feedbackEl.textContent = ok ? "Panoya kopyalandi!" : "Kopyalama basarisiz.";
     });
 
-    return card;
+    return { card, execute: executeCall };
+  }
+
+  async function processAutoQueue(pendingRecords) {
+    if (!pendingRecords.length || autoBusy || !settings.autoRun) return;
+    if (!hostStatus.connected) {
+      setDockMessage("Otonom mod bekliyor: Yerel sunucu bagli degil.");
+      return;
+    }
+
+    const limit = Math.max(1, Number(settings.maxAutoSteps) || 20);
+    if (autoStepsCount >= limit) {
+      settings.autoRun = false;
+      updateAutoToggleUI();
+      setDockMessage(`Otonom adim sinirina (${limit}) ulasildi; duraklatildi.`);
+      return;
+    }
+
+    autoBusy = true;
+    try {
+      const batchResults = [];
+      for (const rec of pendingRecords) {
+        if (!settings.autoRun) break;
+        if (rec.locked || !rec.execute) continue;
+        autoStepsCount += 1;
+        updateAutoToggleUI();
+        setDockMessage(`Otonom calistiriliyor (${rec.tool})...`);
+        const formatted = await rec.execute({ insertAndSubmit: false });
+        if (formatted) batchResults.push(formatted);
+      }
+
+      if (batchResults.length > 0 && settings.autoInsertResult) {
+        const combined = batchResults.join("\n\n");
+        const ins = insertTextIntoChat(combined, true);
+        if (ins.ok) {
+          if (settings.autoSubmitResult) {
+            const sub = await submitChatMessage(ins.input);
+            setDockMessage(
+              sub.ok
+                ? `Sonuc sohbete otomatik gonderildi (${autoStepsCount}/${limit}).`
+                : `Sonuc yazildi, gonderme bekliyor: ${sub.error}`
+            );
+          } else {
+            setDockMessage("Sonuc sohbet kutusuna otomatik yazildi.");
+          }
+        } else {
+          setDockMessage(ins.error);
+        }
+      }
+    } catch (err) {
+      setDockMessage(`Otonom calistirma hatasi: ${err && err.message ? err.message : String(err)}`);
+    } finally {
+      autoBusy = false;
+    }
   }
 
   function scanDocument() {
@@ -438,17 +637,20 @@
 
     try {
       const nodes = document.querySelectorAll("pre code, pre");
-      let addedNewPending = false;
+      const hashCounts = new Map();
+      const newlyAppearedPending = [];
 
       for (const el of nodes) {
         if (!el || (el.closest && (el.closest(".alb-card") || el.closest(".alb-dock")))) continue;
-        // If <pre> has a <code> child, process the <code> child instead of <pre> twice
         if (el.tagName === "PRE" && el.querySelector && el.querySelector("code")) continue;
 
         const raw = el.textContent || "";
         const hash = simpleHash(raw);
-        const existing = trackedNodes.get(el);
+        const occIndex = hashCounts.get(hash) || 0;
+        hashCounts.set(hash, occIndex + 1);
+        const occurrenceKey = `${hash}#${occIndex}`;
 
+        const existing = trackedNodes.get(el);
         if (existing) {
           if (existing.locked || existing.hash === hash) continue;
           if (existing.cardEl && existing.cardEl.parentNode) {
@@ -461,35 +663,62 @@
         const parsed = Parser.parseToolBlock(raw, { languageHint: hint });
 
         if (!parsed) {
-          trackedNodes.set(el, { hash, cardId: null, cardEl: null, locked: false });
+          trackedNodes.set(el, { hash, occurrenceKey, cardId: null, cardEl: null, locked: false });
           continue;
         }
 
+        // Baseline any tool blocks that already existed on initial page load so old history never auto-runs!
+        if (!initialScanDone) {
+          executedOccurrences.add(occurrenceKey);
+        }
+
+        const alreadyHandled = executedOccurrences.has(occurrenceKey);
         const cardId = `alb_${++cardCounter}`;
-        const card = createCardElement(parsed, cardId, el);
-        // Prepend newest tool call at top of tray so user sees it immediately without scrolling Arena chat!
+        const { card, execute } = createCardElement(parsed, cardId, el, occurrenceKey);
         trayListEl.insertBefore(card, trayListEl.firstChild);
 
-        trackedNodes.set(el, { hash, cardId, cardEl: card, locked: false });
-        activeRecords.set(cardId, { cardId, cardEl: card, locked: false, valid: Boolean(parsed.valid) });
-        if (parsed.valid) addedNewPending = true;
+        trackedNodes.set(el, { hash, occurrenceKey, cardId, cardEl: card, locked: alreadyHandled });
+        const rec = {
+          cardId,
+          cardEl: card,
+          tool: parsed.tool,
+          locked: alreadyHandled,
+          valid: Boolean(parsed.valid),
+          execute,
+        };
+        activeRecords.set(cardId, rec);
+
+        if (alreadyHandled) {
+          const st = card.querySelector(".alb-status");
+          if (st) st.textContent = "Gecmis Oge";
+        } else if (parsed.valid) {
+          newlyAppearedPending.push(rec);
+        }
       }
 
+      initialScanDone = true;
       updateTrayCounter();
-      if (addedNewPending) {
+
+      if (newlyAppearedPending.length > 0) {
         expandDock();
+        if (settings.autoRun) {
+          if (isModelStreaming()) {
+            setDockMessage("Model yaniti tamamlaniyor, bitince otomatik calisacak...");
+            scheduleScan(700);
+          } else {
+            processAutoQueue(newlyAppearedPending);
+          }
+        }
       }
     } catch (err) {
-      if (dockEl) {
-        const msgEl = dockEl.querySelector(".alb-dock-msg");
-        if (msgEl) msgEl.textContent = `Tarama hatasi: ${err && err.message ? err.message : String(err)}`;
-      }
+      setDockMessage(`Tarama hatasi: ${err && err.message ? err.message : String(err)}`);
     }
   }
 
-  function scheduleScan() {
+  function scheduleScan(customDelay) {
     if (scanTimer) clearTimeout(scanTimer);
-    scanTimer = setTimeout(scanDocument, 300);
+    const delay = typeof customDelay === "number" ? customDelay : settings.autoRun ? 850 : 300;
+    scanTimer = setTimeout(scanDocument, delay);
   }
 
   async function refreshStatusAndSettings() {
@@ -499,7 +728,8 @@
     ]);
 
     if (settingsRes && settingsRes.ok && settingsRes.settings) {
-      settings = settingsRes.settings;
+      settings = { ...settings, ...settingsRes.settings };
+      updateAutoToggleUI();
     }
 
     if (pingRes && pingRes.ok && pingRes.result) {
@@ -570,7 +800,8 @@
         <div class="alb-dock-ws-label">Calisma Ortami:</div>
         <div class="alb-dock-ws">-</div>
         <div class="alb-dock-btns">
-          <button type="button" class="alb-btn alb-btn-sm alb-copy-sys">Sistem Promptu Kopyala</button>
+          <button type="button" class="alb-btn alb-btn-sm alb-auto-toggle">Otonom: ACIK</button>
+          <button type="button" class="alb-btn alb-btn-sm alb-copy-sys">Prompt Kopyala</button>
           <button type="button" class="alb-btn alb-btn-sm alb-insert-sys">Sohbete Yapistir</button>
           <button type="button" class="alb-btn alb-btn-sm alb-rescan">Tara / Ping</button>
         </div>
@@ -581,9 +812,9 @@
 
     const toggleBtn = dock.querySelector(".alb-dock-toggle");
     const header = dock.querySelector(".alb-dock-header");
-    const msgEl = dock.querySelector(".alb-dock-msg");
     trayListEl = dock.querySelector(".alb-tray-list");
     trayCountEl = dock.querySelector(".alb-tray-count");
+    autoToggleBtn = dock.querySelector(".alb-auto-toggle");
 
     function toggle() {
       const collapsed = dock.classList.toggle("alb-dock-collapsed");
@@ -594,21 +825,30 @@
       if (e.target === toggleBtn || e.currentTarget === header) toggle();
     });
 
+    autoToggleBtn.addEventListener("click", async () => {
+      const nextAuto = !settings.autoRun;
+      settings.autoRun = nextAuto;
+      if (nextAuto) autoStepsCount = 0;
+      updateAutoToggleUI();
+      await sendMessage({ type: "SAVE_SETTINGS", settings: { autoRun: nextAuto } });
+      setDockMessage(nextAuto ? "Otonom mod acildi." : "Otonom mod duraklatildi.");
+    });
+
     dock.querySelector(".alb-copy-sys").addEventListener("click", async () => {
       const ok = await copyToClipboard(Parser.SYSTEM_PROMPT);
-      msgEl.textContent = ok ? "Sistem promptu panoya kopyalandi." : "Kopyalama basarisiz.";
+      setDockMessage(ok ? "Sistem promptu panoya kopyalandi." : "Kopyalama basarisiz.");
     });
 
     dock.querySelector(".alb-insert-sys").addEventListener("click", () => {
       const res = insertTextIntoChat(Parser.SYSTEM_PROMPT, false);
-      msgEl.textContent = res.ok ? "Sohbet kutusuna yerlestirildi." : res.error;
+      setDockMessage(res.ok ? "Sohbet kutusuna yerlestirildi." : res.error);
     });
 
     dock.querySelector(".alb-rescan").addEventListener("click", async () => {
-      msgEl.textContent = "Yenileniyor...";
+      setDockMessage("Yenileniyor...");
       await refreshStatusAndSettings();
       scanDocument();
-      msgEl.textContent = "Tarama ve baglanti kontrolu tamamlandi.";
+      setDockMessage("Tarama ve baglanti kontrolu tamamlandi.");
     });
 
     document.body.appendChild(dock);
@@ -621,8 +861,10 @@
     scanDocument();
 
     if (document.body && typeof MutationObserver !== "undefined") {
-      const observer = new MutationObserver(() => {
-        scheduleScan();
+      const observer = new MutationObserver((mutations) => {
+        // Ignore mutations inside our own dock so tray updates don't re-trigger scan timer
+        const hasExternal = mutations.some((m) => !(m.target && m.target.closest && m.target.closest(".alb-dock")));
+        if (hasExternal) scheduleScan();
       });
       observer.observe(document.body, {
         childList: true,
@@ -636,7 +878,16 @@
         chrome.storage.onChanged.addListener((changes) => {
           if (!changes) return;
           if (changes.enabled) settings.enabled = Boolean(changes.enabled.newValue);
+          if (changes.autoRun) {
+            settings.autoRun = Boolean(changes.autoRun.newValue);
+            updateAutoToggleUI();
+          }
           if (changes.autoInsertResult) settings.autoInsertResult = Boolean(changes.autoInsertResult.newValue);
+          if (changes.autoSubmitResult) settings.autoSubmitResult = Boolean(changes.autoSubmitResult.newValue);
+          if (changes.maxAutoSteps) {
+            settings.maxAutoSteps = Number(changes.maxAutoSteps.newValue) || 20;
+            updateAutoToggleUI();
+          }
           if (changes.apiToken || changes.serverUrl) {
             refreshStatusAndSettings();
           }

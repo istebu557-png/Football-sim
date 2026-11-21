@@ -53,7 +53,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const toggleTokenBtn = document.getElementById("toggleTokenBtn");
   const saveConnBtn = document.getElementById("saveConnBtn");
   const enabledChk = document.getElementById("enabledChk");
+  const autoRunChk = document.getElementById("autoRunChk");
   const autoInsertChk = document.getElementById("autoInsertChk");
+  const autoSubmitChk = document.getElementById("autoSubmitChk");
+  const maxAutoStepsInput = document.getElementById("maxAutoStepsInput");
   const copyPromptBtn = document.getElementById("copyPromptBtn");
   const msgBox = document.getElementById("msgBox");
 
@@ -91,7 +94,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     serverUrlInput.value = info.settings.serverUrl || "http://127.0.0.1:38450";
     apiTokenInput.value = info.settings.apiToken || "";
     enabledChk.checked = Boolean(info.settings.enabled);
+    autoRunChk.checked = Boolean(info.settings.autoRun);
     autoInsertChk.checked = Boolean(info.settings.autoInsertResult);
+    autoSubmitChk.checked = Boolean(info.settings.autoSubmitResult);
+    maxAutoStepsInput.value = String(info.settings.maxAutoSteps || 20);
   }
 
   toggleTokenBtn.addEventListener("click", () => {
@@ -124,9 +130,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     msgBox.textContent = "Ayarlar kaydedildi.";
   });
 
+  autoRunChk.addEventListener("change", async () => {
+    await sendMsg({ type: "SAVE_SETTINGS", settings: { autoRun: autoRunChk.checked } });
+    msgBox.textContent = "Otomatik calistirma ayari kaydedildi.";
+  });
+
   autoInsertChk.addEventListener("change", async () => {
     await sendMsg({ type: "SAVE_SETTINGS", settings: { autoInsertResult: autoInsertChk.checked } });
     msgBox.textContent = "Ayarlar kaydedildi.";
+  });
+
+  autoSubmitChk.addEventListener("change", async () => {
+    await sendMsg({ type: "SAVE_SETTINGS", settings: { autoSubmitResult: autoSubmitChk.checked } });
+    msgBox.textContent = "Otomatik gonderme ayari kaydedildi.";
+  });
+
+  maxAutoStepsInput.addEventListener("change", async () => {
+    const val = Math.max(1, Math.min(100, Number(maxAutoStepsInput.value) || 20));
+    maxAutoStepsInput.value = String(val);
+    await sendMsg({ type: "SAVE_SETTINGS", settings: { maxAutoSteps: val } });
+    msgBox.textContent = "Maksimum adim sayisi kaydedildi.";
   });
 
   copyPromptBtn.addEventListener("click", async () => {
