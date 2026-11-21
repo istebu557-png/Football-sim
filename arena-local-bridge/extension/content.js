@@ -371,7 +371,7 @@
   async function refreshStatusAndSettings(dockEl) {
     const [settingsRes, pingRes] = await Promise.all([
       sendMessage({ type: "GET_SETTINGS" }),
-      sendMessage({ type: "NATIVE_PING" }),
+      sendMessage({ type: "SERVER_PING" }),
     ]);
 
     if (settingsRes && settingsRes.ok && settingsRes.settings) {
@@ -384,6 +384,7 @@
         workspace_root: pingRes.result.workspace_root || "",
         workspace_exists: Boolean(pingRes.result.workspace_exists),
         full_system_access: Boolean(pingRes.result.full_system_access),
+        authMissing: false,
         error: null,
       };
     } else {
@@ -391,6 +392,7 @@
         connected: false,
         workspace_root: "",
         full_system_access: false,
+        authMissing: Boolean(pingRes && pingRes.authMissing),
         error: (pingRes && pingRes.error) || "Baglanti kurulamadi",
       };
     }
@@ -414,9 +416,14 @@
       dot.className = "alb-dot alb-dot-warn";
       statusText.textContent = "Workspace Eksik";
       wsEl.textContent = hostStatus.workspace_root || "config.json icinde workspace_root ayarlayin";
+    } else if (hostStatus.authMissing) {
+      dot.className = "alb-dot alb-dot-warn";
+      statusText.textContent = "Token Gerekli";
+      wsEl.textContent = hostStatus.error || "";
+      wsEl.title = hostStatus.error || "";
     } else {
       dot.className = "alb-dot alb-dot-err";
-      statusText.textContent = "Bridge Bagli Degil";
+      statusText.textContent = "Sunucu Kapali";
       wsEl.textContent = hostStatus.error || "";
       wsEl.title = hostStatus.error || "";
     }
@@ -496,6 +503,9 @@
     chrome.storage.onChanged.addListener((changes) => {
       if (changes.enabled) settings.enabled = Boolean(changes.enabled.newValue);
       if (changes.autoInsertResult) settings.autoInsertResult = Boolean(changes.autoInsertResult.newValue);
+      if (changes.apiToken || changes.serverUrl) {
+        refreshStatusAndSettings(dock);
+      }
     });
   }
 

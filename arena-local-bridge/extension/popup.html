@@ -12,28 +12,33 @@
       <img src="icons/icon48.png" alt="Logo" class="logo" />
       <div>
         <h1>Arena Local Bridge</h1>
-        <p class="subtitle">Chrome Native Messaging (Secenek 2A)</p>
+        <p class="subtitle">Localhost HTTP + Token (Secenek 2B)</p>
       </div>
     </header>
 
     <section class="card">
       <div class="row-between">
-        <span class="label">Native Host Durumu</span>
+        <span class="label">Sunucu Durumu</span>
         <span id="statusBadge" class="pill pill-wait">Kontrol ediliyor</span>
       </div>
       <div id="hostInfo" class="mono-box">Baglanti bekleniyor...</div>
-      <button id="pingBtn" type="button" class="btn btn-primary">Baglantiyi Test Et (Ping)</button>
+      <button id="pingBtn" type="button" class="btn">Baglantiyi Test Et (Ping)</button>
     </section>
 
     <section class="card">
-      <div class="row-between">
-        <span class="label">Eklenti ID (install.py icin)</span>
-        <button id="copyIdBtn" type="button" class="btn btn-xs">Kopyala</button>
+      <div class="label" style="margin-bottom: 6px;">Yerel Sunucu Baglantisi</div>
+      <label class="field-label" for="serverUrlInput">Sunucu Adresi (127.0.0.1)</label>
+      <input id="serverUrlInput" type="text" class="input" placeholder="http://127.0.0.1:38450" />
+
+      <div class="row-between" style="margin-top: 8px; margin-bottom: 4px;">
+        <label class="field-label" style="margin: 0;" for="apiTokenInput">API Token</label>
+        <button id="toggleTokenBtn" type="button" class="btn btn-xs">Goster</button>
       </div>
-      <div id="extIdBox" class="mono-box">-</div>
-      <div class="hint">
-        Kurulum komutu:<br />
-        <code id="installCmd">python3 install/install.py --extension-id ...</code>
+      <input id="apiTokenInput" type="password" class="input" placeholder="Terminalde yazan Token'i yapistirin" />
+
+      <button id="saveConnBtn" type="button" class="btn btn-primary" style="margin-top: 8px;">Kaydet ve Baglan</button>
+      <div class="hint" style="margin-top: 8px;">
+        Bilgisayarinizda <code>./start.sh</code> veya <code>start.bat</code> calistirip terminalde gorunen Token'i yapistirmaniz yeterlidir.
       </div>
     </section>
 
